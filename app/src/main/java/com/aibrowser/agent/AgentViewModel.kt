@@ -1,18 +1,24 @@
 package com.aibrowser.agent
 
+import android.content.Context
+import android.content.Intent
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aibrowser.data.SettingsRepository
 import com.aibrowser.data.models.BehaviorConfig
 import com.aibrowser.data.models.Message
 import com.aibrowser.data.models.ToolCall
+import com.aibrowser.service.AgentForegroundService
 import com.google.gson.Gson
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.util.UUID
@@ -22,7 +28,8 @@ import javax.inject.Inject
 class AgentViewModel @Inject constructor(
     private val aiService: AiService,
     private val mcpController: McpController,
-    private val settingsRepository: SettingsRepository
+    private val settingsRepository: SettingsRepository,
+    @ApplicationContext private val context: Context
 ) : ViewModel() {
 
     private val _messages = MutableStateFlow<List<Message>>(emptyList())
@@ -101,6 +108,14 @@ class AgentViewModel @Inject constructor(
             systemPromptContent = config.systemPrompt
             ttsPromptContent = config.ttsPrompt
             _messages.value = listOf(createSystemMessage())
+        }
+
+        viewModelScope.launch {
+            combine(_isLoading, _currentAction) { loading, action ->
+                loading to action
+            }.collect { (loading, action) ->
+                updateForegroundService(loading, action)
+            }
         }
     }
 
@@ -295,6 +310,17 @@ class AgentViewModel @Inject constructor(
             systemPromptContent = config.systemPrompt
             ttsPromptContent = config.ttsPrompt
             _messages.value = listOf(createSystemMessage())
+        }
+    }
+
+    private fun updateForegroundService(isLoading: Boolean, action: String = "") {
+        val intent = Intent(context, AgentForegroundService::class.java).apply {
+            putExtra(AgentForegroundService.EXTRA_ACTION, action.ifBlank { "Working..." })
+        }
+        if (isLoading) {
+            ContextCompat.startForegroundService(context, intent)
+        } else {
+            context.stopService(intent)
         }
     }
 
