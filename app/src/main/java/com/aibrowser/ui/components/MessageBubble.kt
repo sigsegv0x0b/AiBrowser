@@ -9,12 +9,19 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Replay
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -24,6 +31,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aibrowser.data.models.Message
+import java.util.Locale
 
 @Composable
 fun MessageBubble(
@@ -80,11 +88,147 @@ fun MessageBubble(
             }
         }
 
+        if (message.content.isNotBlank() && (!isTool)) {
+            Row(
+                modifier = Modifier.padding(top = 2.dp),
+                horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TtsSpeaker(text = if (isUser) message.content else stripMarkdown(message.content))
+            }
+        }
+
         message.toolCalls.forEach { toolCall ->
             ToolCallCard(
                 toolCall = toolCall,
                 modifier = Modifier.padding(top = if (message.content.isNotBlank()) 4.dp else 0.dp)
             )
+        }
+    }
+}
+
+private fun stripMarkdown(text: String): String {
+    return text
+        .replace(Regex("```[\\s\\S]*?```"), " ")
+        .replace(Regex("`[^`]+`"), " ")
+        .replace(Regex("\\*\\*"), "")
+        .replace(Regex("(?<!\\*)\\*(?!\\*)"), "")
+        .replace(Regex("\\[([^]]+)]\\([^)]+\\)"), "$1")
+        .replace(Regex("^\\|.*$", RegexOption.MULTILINE), "")
+        .replace(Regex("---+"), "")
+        .replace(Regex("\\n{3,}"), "\n\n")
+        .trim()
+}
+
+private enum class TtsState { IDLE, PLAYING, PAUSED }
+private const val CHARS_PER_SEC = 15
+private const val SKIP_SEC = 10
+
+@Composable
+private fun TtsSpeaker(text: String) {
+    val context = LocalContext.current
+    var tts by remember { mutableStateOf<android.speech.tts.TextToSpeech?>(null) }
+    var ready by remember { mutableStateOf(false) }
+    var state by remember { mutableStateOf(TtsState.IDLE) }
+    var speakFrom by remember { mutableStateOf(0) }
+    var startTime by remember { mutableStateOf(0L) }
+    var startFrom by remember { mutableStateOf(0) }
+
+    fun calcPosition(): Int {
+        if (startTime == 0L) return speakFrom
+        val elapsed = ((System.currentTimeMillis() - startTime) / 1000).toInt()
+        return (startFrom + elapsed * CHARS_PER_SEC).coerceAtMost(text.length)
+    }
+
+    fun stopTts(ttsInstance: android.speech.tts.TextToSpeech?) {
+        ttsInstance?.stop()
+        state = TtsState.PAUSED
+        speakFrom = calcPosition()
+    }
+
+    fun playTts(ttsInstance: android.speech.tts.TextToSpeech?, from: Int) {
+        if (from >= text.length) {
+            state = TtsState.IDLE
+            speakFrom = 0
+            return
+        }
+        val sub = text.substring(from)
+        startFrom = from
+        startTime = System.currentTimeMillis()
+        ttsInstance?.speak(sub, android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "utt")
+        state = TtsState.PLAYING
+    }
+
+    DisposableEffect(context) {
+        val ref = arrayOfNulls<android.speech.tts.TextToSpeech>(1)
+        ref[0] = android.speech.tts.TextToSpeech(context) { status ->
+            if (status == android.speech.tts.TextToSpeech.SUCCESS) {
+                ref[0]?.language = Locale.getDefault()
+                ready = true
+            }
+        }
+        tts = ref[0]
+        ref[0]?.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
+            override fun onDone(utteranceId: String?) {
+                state = TtsState.IDLE
+                speakFrom = 0
+                startTime = 0L
+            }
+            override fun onError(utteranceId: String?) {}
+            override fun onStart(utteranceId: String?) {}
+        })
+        onDispose {
+            ref[0]?.stop()
+            ref[0]?.shutdown()
+        }
+    }
+
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(0.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (state == TtsState.IDLE) {
+            IconButton(
+                onClick = { if (ready) playTts(tts, 0) },
+                modifier = Modifier.size(28.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.VolumeUp,
+                    contentDescription = "Read aloud",
+                    modifier = Modifier.size(20.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        } else {
+            IconButton(onClick = { stopTts(tts); playTts(tts, 0) }, modifier = Modifier.size(28.dp)) {
+                Icon(Icons.Default.Replay, "Restart", Modifier.size(18.dp), MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            IconButton(onClick = {
+                stopTts(tts)
+                playTts(tts, (speakFrom - SKIP_SEC * CHARS_PER_SEC).coerceAtLeast(0))
+            }, modifier = Modifier.size(28.dp)) {
+                Icon(Icons.Default.SkipPrevious, "-10s", Modifier.size(18.dp), MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            IconButton(onClick = {
+                if (state == TtsState.PLAYING) {
+                    stopTts(tts)
+                } else {
+                    playTts(tts, speakFrom)
+                }
+            }, modifier = Modifier.size(28.dp)) {
+                Icon(
+                    if (state == TtsState.PLAYING) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    if (state == TtsState.PLAYING) "Pause" else "Play",
+                    Modifier.size(20.dp),
+                    MaterialTheme.colorScheme.primary
+                )
+            }
+            IconButton(onClick = {
+                stopTts(tts)
+                playTts(tts, (speakFrom + SKIP_SEC * CHARS_PER_SEC).coerceAtMost(text.length))
+            }, modifier = Modifier.size(28.dp)) {
+                Icon(Icons.Default.SkipNext, "+10s", Modifier.size(18.dp), MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
     }
 }

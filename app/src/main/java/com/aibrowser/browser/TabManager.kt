@@ -64,4 +64,20 @@ class TabManager @Inject constructor(
             _tabs[index] = update(_tabs[index])
         }
     }
+
+    fun goBack(tabId: String) {
+        getTab(tabId)?.webView?.goBack()
+    }
+
+    fun goForward(tabId: String) {
+        getTab(tabId)?.webView?.goForward()
+    }
+
+    fun reload(tabId: String) {
+        getTab(tabId)?.webView?.reload()
+    }
+
+    fun loadUrl(tabId: String, url: String) {
+        getTab(tabId)?.webView?.loadUrl(url)
+    }
 }

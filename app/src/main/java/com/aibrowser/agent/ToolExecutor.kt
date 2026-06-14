@@ -1,8 +1,10 @@
 package com.aibrowser.agent
 
 import com.aibrowser.browser.TabManager
+import com.aibrowser.data.SettingsRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -12,9 +14,12 @@ import javax.inject.Singleton
 
 @Singleton
 class ToolExecutor @Inject constructor(
-    private val tabManager: TabManager
+    private val tabManager: TabManager,
+    private val settingsRepository: SettingsRepository
 ) {
     suspend fun execute(toolName: String, arguments: Map<String, Any>): String {
+        val config = settingsRepository.behaviorConfig.first()
+        val scrollIntoView = config.scrollIntoView
         return withContext(Dispatchers.Main) {
             when (toolName) {
                 "browser_navigate" -> navigate(arguments["url"] as String)
@@ -31,24 +36,34 @@ class ToolExecutor @Inject constructor(
                     target = arguments["target"] as String,
                     doubleClick = arguments["doubleClick"] as? Boolean,
                     button = arguments["button"] as? String,
-                    modifiers = arguments["modifiers"] as? List<String>
+                    modifiers = arguments["modifiers"] as? List<String>,
+                    scrollIntoView = scrollIntoView
                 )
                 "browser_type" -> type(
                     target = arguments["target"] as String,
                     text = arguments["text"] as String,
                     submit = arguments["submit"] as? Boolean,
-                    slowly = arguments["slowly"] as? Boolean
+                    slowly = arguments["slowly"] as? Boolean,
+                    scrollIntoView = scrollIntoView
                 )
-                "browser_fill_form" -> fillForm(arguments["fields"] as List<Map<String, String>>)
+                "browser_fill_form" -> fillForm(
+                    fields = arguments["fields"] as List<Map<String, String>>,
+                    scrollIntoView = scrollIntoView
+                )
                 "browser_select_option" -> selectOption(
                     target = arguments["target"] as String,
-                    values = arguments["values"] as List<String>
+                    values = arguments["values"] as List<String>,
+                    scrollIntoView = scrollIntoView
                 )
-                "browser_hover" -> hover(arguments["target"] as String)
+                "browser_hover" -> hover(
+                    target = arguments["target"] as String,
+                    scrollIntoView = scrollIntoView
+                )
                 "browser_press_key" -> pressKey(arguments["key"] as String)
                 "browser_evaluate" -> evaluate(
                     function = arguments["function"] as String,
-                    target = arguments["target"] as? String
+                    target = arguments["target"] as? String,
+                    scrollIntoView = scrollIntoView
                 )
                 "browser_wait_for" -> waitFor(
                     text = arguments["text"] as? String,
@@ -62,7 +77,8 @@ class ToolExecutor @Inject constructor(
                 )
                 "browser_drag" -> drag(
                     startTarget = arguments["startTarget"] as String,
-                    endTarget = arguments["endTarget"] as String
+                    endTarget = arguments["endTarget"] as String,
+                    scrollIntoView = scrollIntoView
                 )
                 "browser_handle_dialog" -> handleDialog(
                     accept = arguments["accept"] as? Boolean ?: true,
@@ -313,7 +329,7 @@ class ToolExecutor @Inject constructor(
         return "Screenshots require native Android WebView capture. Use browser_snapshot instead."
     }
 
-    private suspend fun click(target: String, doubleClick: Boolean?, button: String?, modifiers: List<String>?): String {
+    private suspend fun click(target: String, doubleClick: Boolean?, button: String?, modifiers: List<String>?, scrollIntoView: Boolean = true): String {
         val sel = resolveSelector(target)
         val clickType = if (doubleClick == true) "dblclick" else "click"
         val btn = when (button) {
@@ -326,10 +342,12 @@ class ToolExecutor @Inject constructor(
         val alt = modifiers?.contains("Alt") == true
         val meta = modifiers?.contains("Meta") == true
         val modProps = "ctrlKey: $ctrl, shiftKey: $shift, altKey: $alt, metaKey: $meta"
+        val scrollJs = if (scrollIntoView) "el.scrollIntoView({behavior: 'instant', block: 'center'});" else ""
         val js = """
             (function() {
                 var el = document.querySelector("$sel");
                 if (!el) return "Element not found: $target";
+                $scrollJs
                 el.dispatchEvent(new MouseEvent('$clickType', {
                     bubbles: true,
                     cancelable: true,
@@ -343,14 +361,16 @@ class ToolExecutor @Inject constructor(
         return runJs(js)
     }
 
-    private suspend fun type(target: String, text: String, submit: Boolean?, slowly: Boolean?): String {
+    private suspend fun type(target: String, text: String, submit: Boolean?, slowly: Boolean?, scrollIntoView: Boolean = true): String {
         val sel = resolveSelector(target)
         val escaped = text.replace("'", "\\'").replace("\n", "\\n")
+        val scrollJs = if (scrollIntoView) "el.scrollIntoView({behavior: 'instant', block: 'center'});" else ""
         if (slowly == true) {
             val js = """
                 (function() {
                     var el = document.querySelector('$sel');
                     if (!el) return 'Element not found: $target';
+                    $scrollJs
                     el.focus();
                     el.value = '';
                     for (var i = 0; i < '$escaped'.length; i++) {
@@ -369,6 +389,7 @@ class ToolExecutor @Inject constructor(
             (function() {
                 var el = document.querySelector("$sel");
                 if (!el) return "Element not found: $target";
+                $scrollJs
                 el.focus();
                 el.value = '$escaped';
                 el.dispatchEvent(new Event('input', { bubbles: true }));
@@ -380,7 +401,8 @@ class ToolExecutor @Inject constructor(
         return runJs(js)
     }
 
-    private suspend fun fillForm(fields: List<Map<String, String>>): String {
+    private suspend fun fillForm(fields: List<Map<String, String>>, scrollIntoView: Boolean = true): String {
+        val scrollJs = if (scrollIntoView) "el.scrollIntoView({behavior: 'instant', block: 'center'});" else ""
         val results = mutableListOf<String>()
         for (field in fields) {
             val selector = field["selector"] ?: continue
@@ -391,6 +413,7 @@ class ToolExecutor @Inject constructor(
                 (function() {
                     var el = document.querySelector('$sel');
                     if (!el) return "Not found: $selector";
+                    $scrollJs
                     el.focus();
                     el.value = '$escaped';
                     el.dispatchEvent(new Event('input', { bubbles: true }));
@@ -402,13 +425,15 @@ class ToolExecutor @Inject constructor(
         return results.joinToString("; ")
     }
 
-    private suspend fun selectOption(target: String, values: List<String>): String {
+    private suspend fun selectOption(target: String, values: List<String>, scrollIntoView: Boolean = true): String {
         val sel = resolveSelector(target)
+        val scrollJs = if (scrollIntoView) "el.scrollIntoView({behavior: 'instant', block: 'center'});" else ""
         val valArr = values.joinToString(",") { "\"$it\"" }
         val js = """
             (function() {
                 var el = document.querySelector("$sel");
                 if (!el) return "Element not found: $target";
+                $scrollJs
                 var vals = [$valArr];
                 for (var i = 0; i < el.options.length; i++) {
                     if (vals.includes(el.options[i].value)) {
@@ -422,12 +447,14 @@ class ToolExecutor @Inject constructor(
         return runJs(js)
     }
 
-    private suspend fun hover(target: String): String {
+    private suspend fun hover(target: String, scrollIntoView: Boolean = true): String {
         val sel = resolveSelector(target)
+        val scrollJs = if (scrollIntoView) "el.scrollIntoView({behavior: 'instant', block: 'center'});" else ""
         val js = """
             (function() {
                 var el = document.querySelector("$sel");
                 if (!el) return "Element not found: $target";
+                $scrollJs
                 el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
                 el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
                 return 'Hovered ' + el.tagName;
@@ -460,10 +487,11 @@ class ToolExecutor @Inject constructor(
         return runJs(js)
     }
 
-    private suspend fun evaluate(function: String, target: String?): String {
+    private suspend fun evaluate(function: String, target: String?, scrollIntoView: Boolean = true): String {
         if (target != null) {
             val sel = resolveSelector(target)
-            return runJs("""(function() { var el = document.querySelector("$sel"); return el ? (function(){ $function })() : "Element not found"; })()""")
+            val scrollJs = if (scrollIntoView) "el.scrollIntoView({behavior: 'instant', block: 'center'});" else ""
+            return runJs("""(function() { var el = document.querySelector("$sel"); if (!el) return "Element not found"; $scrollJs return (function(){ $function })(); })()""")
         }
         return runJs("""($function)()""")
     }
@@ -491,15 +519,20 @@ class ToolExecutor @Inject constructor(
         return runJs(js)
     }
 
-    private suspend fun drag(startTarget: String, endTarget: String): String {
+    private suspend fun drag(startTarget: String, endTarget: String, scrollIntoView: Boolean = true): String {
         val startSel = resolveSelector(startTarget)
         val endSel = resolveSelector(endTarget)
+        val scrollJs = if (scrollIntoView) """
+                startEl.scrollIntoView({behavior: 'instant', block: 'center'});
+                endEl.scrollIntoView({behavior: 'instant', block: 'center'});
+        """.trimIndent() else ""
         val js = """
             (function() {
                 var startEl = document.querySelector("$startSel");
                 var endEl = document.querySelector("$endSel");
                 if (!startEl) return "Start element not found: $startTarget";
                 if (!endEl) return "End element not found: $endTarget";
+                $scrollJs
                 var startBox = startEl.getBoundingClientRect();
                 var endBox = endEl.getBoundingClientRect();
                 var sx = startBox.left + startBox.width / 2;
