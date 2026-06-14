@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.graphics.Bitmap
 import android.view.ViewGroup
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.runtime.Composable
@@ -16,6 +17,8 @@ import com.aibrowser.browser.TabState
 @Composable
 fun WebViewContainer(
     tab: TabState,
+    blockExternalIntents: Boolean,
+    onIntentBlocked: (String) -> Unit,
     onTitleChanged: (String) -> Unit,
     onUrlChanged: (String) -> Unit,
     onLoadingChanged: (Boolean) -> Unit,
@@ -57,6 +60,37 @@ fun WebViewContainer(
                         onLoadingChanged(false)
                         view?.let { onNavigationStateChanged(it.canGoBack(), it.canGoForward()) }
                         StealthInjector.inject(tabWebView)
+                    }
+
+                    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                        val uri = request?.url ?: return false
+                        val scheme = uri.scheme?.lowercase() ?: ""
+
+                        if (scheme == "http" || scheme == "https" || !blockExternalIntents) {
+                            return false
+                        }
+
+                        val blockedUrl = uri.toString()
+
+                        if (scheme == "intent") {
+                            val fallback = uri.getQueryParameter("browser_fallback_url")
+                            if (!fallback.isNullOrBlank()) {
+                                view?.loadUrl(fallback)
+                            }
+                            onIntentBlocked(blockedUrl)
+                            return true
+                        }
+
+                        val host = uri.host ?: return true
+                        val httpsUrl = buildString {
+                            append("https://")
+                            append(host)
+                            if (uri.path != null) append(uri.path)
+                            if (uri.query != null) append("?").append(uri.query)
+                        }
+                        view?.loadUrl(httpsUrl)
+                        onIntentBlocked(blockedUrl)
+                        return true
                     }
                 }
 
