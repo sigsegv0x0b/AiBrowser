@@ -4,10 +4,12 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.preferencesDataStore
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
-import androidx.datastore.preferences.preferencesDataStore
 import com.aibrowser.data.models.ApiConfig
+import com.aibrowser.data.models.BehaviorConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -27,6 +29,9 @@ class SettingsRepository @Inject constructor(
         private val KEY_BASE_URL = stringPreferencesKey("base_url")
         private val KEY_CONTEXT_SIZE = intPreferencesKey("context_size")
         private val KEY_MAX_OUTPUT = intPreferencesKey("max_output")
+        private val KEY_SCROLL_INTO_VIEW = booleanPreferencesKey("scroll_into_view")
+        private val KEY_TTS_PROMPT = stringPreferencesKey("tts_prompt")
+        private val KEY_SYSTEM_PROMPT = stringPreferencesKey("system_prompt")
     }
 
     val apiConfig: Flow<ApiConfig> = context.dataStore.data.map { prefs ->
@@ -56,6 +61,22 @@ class SettingsRepository @Inject constructor(
             else prefs.remove(KEY_CONTEXT_SIZE)
             if (config.maxOutputTokens > 0) prefs[KEY_MAX_OUTPUT] = config.maxOutputTokens
             else prefs.remove(KEY_MAX_OUTPUT)
+        }
+    }
+
+    val behaviorConfig: Flow<BehaviorConfig> = context.dataStore.data.map { prefs ->
+        BehaviorConfig(
+            scrollIntoView = prefs[KEY_SCROLL_INTO_VIEW] ?: true,
+            ttsPrompt = prefs[KEY_TTS_PROMPT] ?: BehaviorConfig.DEFAULT_TTS_PROMPT,
+            systemPrompt = prefs[KEY_SYSTEM_PROMPT] ?: BehaviorConfig.DEFAULT_SYSTEM_PROMPT
+        )
+    }
+
+    suspend fun saveBehaviorConfig(config: BehaviorConfig) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_SCROLL_INTO_VIEW] = config.scrollIntoView
+            prefs[KEY_TTS_PROMPT] = config.ttsPrompt
+            prefs[KEY_SYSTEM_PROMPT] = config.systemPrompt
         }
     }
 }

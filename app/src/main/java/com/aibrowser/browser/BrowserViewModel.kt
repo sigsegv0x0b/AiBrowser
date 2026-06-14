@@ -53,4 +53,31 @@ class BrowserViewModel @Inject constructor(
         _tabs.value = tabManager.tabs
         _activeTabId.value = tabManager.activeTabId
     }
+
+    fun goBack() {
+        val id = _activeTabId.value ?: return
+        tabManager.goBack(id)
+        refresh()
+    }
+
+    fun goForward() {
+        val id = _activeTabId.value ?: return
+        tabManager.goForward(id)
+        refresh()
+    }
+
+    fun reloadCurrent() {
+        val id = _activeTabId.value ?: return
+        tabManager.reload(id)
+    }
+
+    fun navigateToUrl(url: String) {
+        val id = _activeTabId.value ?: return
+        var finalUrl = url.trim()
+        if (!finalUrl.startsWith("http://") && !finalUrl.startsWith("https://")) {
+            finalUrl = "https://$finalUrl"
+        }
+        tabManager.loadUrl(id, finalUrl)
+        refresh()
+    }
 }

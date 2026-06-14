@@ -18,6 +18,7 @@ fun WebViewContainer(
     onTitleChanged: (String) -> Unit,
     onUrlChanged: (String) -> Unit,
     onLoadingChanged: (Boolean) -> Unit,
+    onNavigationStateChanged: (Boolean, Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     AndroidView(
@@ -37,6 +38,7 @@ fun WebViewContainer(
                         super.onPageFinished(view, url)
                         onUrlChanged(url ?: "")
                         onLoadingChanged(false)
+                        view?.let { onNavigationStateChanged(it.canGoBack(), it.canGoForward()) }
                         StealthInjector.inject(this@apply)
                     }
                 }

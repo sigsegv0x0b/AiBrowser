@@ -2,6 +2,8 @@ package com.aibrowser.agent
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.aibrowser.data.SettingsRepository
+import com.aibrowser.data.models.BehaviorConfig
 import com.aibrowser.data.models.Message
 import com.aibrowser.data.models.ToolCall
 import com.google.gson.Gson
@@ -11,6 +13,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.util.UUID
 import javax.inject.Inject
@@ -18,7 +21,8 @@ import javax.inject.Inject
 @HiltViewModel
 class AgentViewModel @Inject constructor(
     private val aiService: AiService,
-    private val mcpController: McpController
+    private val mcpController: McpController,
+    private val settingsRepository: SettingsRepository
 ) : ViewModel() {
 
     private val _messages = MutableStateFlow<List<Message>>(emptyList())
@@ -30,17 +34,44 @@ class AgentViewModel @Inject constructor(
     private val _isPaused = MutableStateFlow(false)
     val isPaused: StateFlow<Boolean> = _isPaused.asStateFlow()
 
+    private val _currentAction = MutableStateFlow("")
+    val currentAction: StateFlow<String> = _currentAction.asStateFlow()
+
+    private val _actionHistory = MutableStateFlow<List<String>>(emptyList())
+    val actionHistory: StateFlow<List<String>> = _actionHistory.asStateFlow()
+
     private val gson = Gson()
 
+    private var systemPromptContent: String = BehaviorConfig.DEFAULT_SYSTEM_PROMPT
+    private var ttsPromptContent: String = BehaviorConfig.DEFAULT_TTS_PROMPT
+
+    private fun createSystemMessage(): Message = Message(
+        id = "system",
+        role = Message.Role.SYSTEM,
+        content = systemPromptContent
+    )
+
     companion object {
-        private val SYSTEM_PROMPT = Message(
-            id = "system",
-            role = Message.Role.SYSTEM,
-            content = "You are a browser automation assistant. You have access to browser tools to help the user complete tasks. " +
-                "For every new page, first use browser_snapshot to understand the page content. " +
-                "After receiving tool results, always continue with the next action or provide a response to the user. " +
-                "Do not stop after a single tool call - keep analyzing and acting until the task is complete."
-        )
+        fun describeToolCall(name: String, args: Map<String, Any>): String {
+            return when (name) {
+                "browser_navigate" -> "Navigating to ${args["url"] ?: "page"}"
+                "browser_click" -> "Clicking element ${args.getOrElse("element") { "" }}"
+                "browser_type" -> "Typing text"
+                "browser_snapshot" -> "Taking snapshot"
+                "browser_evaluate" -> "Running JavaScript"
+                "browser_wait_for" -> "Waiting for page to load"
+                "browser_select" -> "Selecting option"
+                "browser_hover" -> "Hovering element"
+                "browser_drag" -> "Dragging element"
+                "browser_handle_dialog" -> "Handling dialog"
+                "browser_console_messages" -> "Reading console"
+                "browser_resize" -> "Resizing viewport"
+                "browser_refresh" -> "Refreshing page"
+                "browser_go_back" -> "Going back"
+                "browser_go_forward" -> "Going forward"
+                else -> "Executing $name"
+            }
+        }
 
         fun jsonToAny(element: JsonElement): Any? {
             return when {
@@ -65,7 +96,12 @@ class AgentViewModel @Inject constructor(
     }
 
     init {
-        _messages.value = listOf(SYSTEM_PROMPT)
+        viewModelScope.launch {
+            val config = settingsRepository.behaviorConfig.first()
+            systemPromptContent = config.systemPrompt
+            ttsPromptContent = config.ttsPrompt
+            _messages.value = listOf(createSystemMessage())
+        }
     }
 
     fun sendMessage(content: String) {
@@ -77,6 +113,8 @@ class AgentViewModel @Inject constructor(
             content = content
         )
         _messages.value = _messages.value + userMessage
+        _actionHistory.value = emptyList()
+        _currentAction.value = "Thinking..."
         _isLoading.value = true
 
         viewModelScope.launch {
@@ -109,18 +147,27 @@ class AgentViewModel @Inject constructor(
 
                             if (toolCalls.isNotEmpty()) {
                                 viewModelScope.launch { executeToolCalls(toolCalls) }
+                            } else {
+                                _isLoading.value = false
                             }
+                        } else {
+                            _isLoading.value = false
                         }
                     }
                     is AiService.StreamEvent.Error -> {
+                        val isNetworkError = event.message.startsWith("Network error")
                         upsertAssistantMessage(assistantId, assistantContent.toString().ifEmpty {
-                            "Error: ${event.message}"
+                            if (isNetworkError) "Network error — tap Resume to retry" else "Error: ${event.message}"
                         }, toolCalls)
+                        if (isNetworkError) {
+                            _isPaused.value = true
+                            _isLoading.value = false
+                        } else {
+                            _isLoading.value = false
+                        }
                     }
                 }
             }
-
-            _isLoading.value = false
         }
     }
 
@@ -136,6 +183,10 @@ class AgentViewModel @Inject constructor(
 
     private suspend fun executeToolCalls(toolCalls: List<ToolCall>) {
         for (toolCall in toolCalls) {
+            if (_currentAction.value.isNotBlank()) {
+                _actionHistory.value = _actionHistory.value + _currentAction.value
+            }
+            _currentAction.value = describeToolCall(toolCall.name, toolCall.arguments)
             updateToolCallStatus(toolCall.id, ToolCall.ToolStatus.RUNNING)
             val result = mcpController.executeToolCall(toolCall)
             updateToolCallStatus(toolCall.id, result.status, result.result)
@@ -148,6 +199,10 @@ class AgentViewModel @Inject constructor(
             )
         }
 
+        if (_currentAction.value.isNotBlank()) {
+            _actionHistory.value = _actionHistory.value + _currentAction.value
+        }
+        _currentAction.value = ""
         if (toolCalls.isNotEmpty() && !_isPaused.value) {
             sendFollowUp()
         } else if (toolCalls.isNotEmpty()) {
@@ -209,10 +264,16 @@ class AgentViewModel @Inject constructor(
                     }
                 }
                 is AiService.StreamEvent.Error -> {
+                    val isNetworkError = event.message.startsWith("Network error")
                     upsertAssistantMessage(followUpId, followUpContent.toString().ifEmpty {
-                        "Error: ${event.message}"
+                        if (isNetworkError) "Network error — tap Resume to retry" else "Error: ${event.message}"
                     }, followUpToolCalls)
-                    _isLoading.value = false
+                    if (isNetworkError) {
+                        _isPaused.value = true
+                        _isLoading.value = false
+                    } else {
+                        _isLoading.value = false
+                    }
                 }
             }
         }
@@ -229,6 +290,34 @@ class AgentViewModel @Inject constructor(
     }
 
     fun clearChat() {
-        _messages.value = listOf(SYSTEM_PROMPT)
+        viewModelScope.launch {
+            val config = settingsRepository.behaviorConfig.first()
+            systemPromptContent = config.systemPrompt
+            ttsPromptContent = config.ttsPrompt
+            _messages.value = listOf(createSystemMessage())
+        }
+    }
+
+    suspend fun generateTtsText(text: String): String {
+        if (text.isBlank()) return text
+        val prompt = ttsPromptContent.ifBlank { BehaviorConfig.DEFAULT_TTS_PROMPT }
+        val ttsSystem = Message(
+            id = "tts_sys",
+            role = Message.Role.SYSTEM,
+            content = prompt
+        )
+        val ttsMsg = Message(
+            id = UUID.randomUUID().toString(),
+            role = Message.Role.USER,
+            content = text
+        )
+        val result = StringBuilder()
+        aiService.sendMessage(listOf(ttsSystem, ttsMsg)) { event ->
+            when (event) {
+                is AiService.StreamEvent.Token -> result.append(event.text)
+                else -> {}
+            }
+        }
+        return result.toString().ifBlank { text }
     }
 }
