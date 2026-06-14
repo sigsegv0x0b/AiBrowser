@@ -31,6 +31,7 @@ fun NavGraph(
             BrowserScreen(
                 browserViewModel = browserViewModel,
                 agentViewModel = agentViewModel,
+                settingsRepository = settingsRepository,
                 onNavigateToAgent = { navController.navigate(Routes.AGENT) },
                 onNavigateToSettings = { navController.navigate(Routes.SETTINGS) }
             )

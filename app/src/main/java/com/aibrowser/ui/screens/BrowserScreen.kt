@@ -23,6 +23,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.aibrowser.agent.AgentViewModel
 import com.aibrowser.browser.BrowserViewModel
+import com.aibrowser.data.SettingsRepository
 import com.aibrowser.ui.components.AgentStatusBubble
 import com.aibrowser.ui.components.TabBar
 import com.aibrowser.ui.components.VoiceInputBar
@@ -32,6 +33,7 @@ import com.aibrowser.ui.components.WebViewContainer
 fun BrowserScreen(
     browserViewModel: BrowserViewModel,
     agentViewModel: AgentViewModel,
+    settingsRepository: SettingsRepository,
     onNavigateToAgent: () -> Unit,
     onNavigateToSettings: () -> Unit
 ) {
@@ -42,6 +44,7 @@ fun BrowserScreen(
     val currentAction by agentViewModel.currentAction.collectAsState()
     val actionHistory by agentViewModel.actionHistory.collectAsState()
     val messages by agentViewModel.messages.collectAsState()
+    val behavior by settingsRepository.behaviorConfig.collectAsState(initial = com.aibrowser.data.models.BehaviorConfig())
     var addressBarExpanded by remember { mutableStateOf(true) }
     var urlInput by remember(activeTab?.url) { mutableStateOf(activeTab?.url ?: "") }
     var voiceModeActive by remember { mutableStateOf(false) }
@@ -171,11 +174,15 @@ fun BrowserScreen(
                 activeTab?.let { tab ->
                     WebViewContainer(
                         tab = tab,
+                        blockExternalIntents = behavior.blockExternalIntents,
+                        onIntentBlocked = { url ->
+                            agentViewModel.addSystemMessage(url)
+                        },
                         onTitleChanged = { title ->
                             browserViewModel.updateTab(tab.id) { it.copy(title = title) }
                         },
                         onUrlChanged = { url ->
-                            urlInput = url
+                            if (tab.id == browserViewModel.activeTabId.value) urlInput = url
                             browserViewModel.updateTab(tab.id) { it.copy(url = url) }
                         },
                         onLoadingChanged = { loading ->

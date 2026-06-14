@@ -353,6 +353,7 @@ private fun BehaviorSettingsTab(
     onSave: (BehaviorConfig) -> Unit
 ) {
     var scrollIntoView by remember(behavior) { mutableStateOf(behavior.scrollIntoView) }
+    var blockExternalIntents by remember(behavior) { mutableStateOf(behavior.blockExternalIntents) }
     var ttsPrompt by remember(behavior) { mutableStateOf(behavior.ttsPrompt) }
     var systemPrompt by remember(behavior) { mutableStateOf(behavior.systemPrompt) }
 
@@ -385,6 +386,29 @@ private fun BehaviorSettingsTab(
             Switch(
                 checked = scrollIntoView,
                 onCheckedChange = { scrollIntoView = it }
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Block external app intents",
+                    style = MaterialTheme.typography.bodyLarge
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = "When enabled, links like twitter:// or intent:// are loaded as https:// in the browser instead of opening an external app.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(Modifier.width(16.dp))
+            Switch(
+                checked = blockExternalIntents,
+                onCheckedChange = { blockExternalIntents = it }
             )
         }
 
@@ -427,6 +451,7 @@ private fun BehaviorSettingsTab(
                 onSave(
                     BehaviorConfig(
                         scrollIntoView = scrollIntoView,
+                        blockExternalIntents = blockExternalIntents,
                         ttsPrompt = ttsPrompt,
                         systemPrompt = systemPrompt
                     )

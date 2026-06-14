@@ -403,6 +403,11 @@ class AgentViewModel @Inject constructor(
         }
     }
 
+    fun addSystemMessage(content: String) {
+        val tabId = currentTabId ?: return
+        tabAppendToolResult(tabId, "[Intent blocked] $content", "external_intent")
+    }
+
     private fun saveToTab(tabId: String?) {
         val id = tabId ?: return
         tabManager.updateTab(id) { it.copy(

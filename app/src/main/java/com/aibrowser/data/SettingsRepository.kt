@@ -30,6 +30,7 @@ class SettingsRepository @Inject constructor(
         private val KEY_CONTEXT_SIZE = intPreferencesKey("context_size")
         private val KEY_MAX_OUTPUT = intPreferencesKey("max_output")
         private val KEY_SCROLL_INTO_VIEW = booleanPreferencesKey("scroll_into_view")
+        private val KEY_BLOCK_EXTERNAL_INTENTS = booleanPreferencesKey("block_external_intents")
         private val KEY_TTS_PROMPT = stringPreferencesKey("tts_prompt")
         private val KEY_SYSTEM_PROMPT = stringPreferencesKey("system_prompt")
     }
@@ -67,6 +68,7 @@ class SettingsRepository @Inject constructor(
     val behaviorConfig: Flow<BehaviorConfig> = context.dataStore.data.map { prefs ->
         BehaviorConfig(
             scrollIntoView = prefs[KEY_SCROLL_INTO_VIEW] ?: true,
+            blockExternalIntents = prefs[KEY_BLOCK_EXTERNAL_INTENTS] ?: true,
             ttsPrompt = prefs[KEY_TTS_PROMPT] ?: BehaviorConfig.DEFAULT_TTS_PROMPT,
             systemPrompt = prefs[KEY_SYSTEM_PROMPT] ?: BehaviorConfig.DEFAULT_SYSTEM_PROMPT
         )
@@ -75,6 +77,7 @@ class SettingsRepository @Inject constructor(
     suspend fun saveBehaviorConfig(config: BehaviorConfig) {
         context.dataStore.edit { prefs ->
             prefs[KEY_SCROLL_INTO_VIEW] = config.scrollIntoView
+            prefs[KEY_BLOCK_EXTERNAL_INTENTS] = config.blockExternalIntents
             prefs[KEY_TTS_PROMPT] = config.ttsPrompt
             prefs[KEY_SYSTEM_PROMPT] = config.systemPrompt
         }
