@@ -16,6 +16,8 @@ The agent controls the browser via tool calls (`browser_navigate`, `browser_clic
 - Configurable system prompt and TTS prompt
 - Dark/light theme (Material 3)
 
+> **Bring your own API key.** The app connects to an LLM provider of your choice — no built-in AI, no bundled model, no cloud service. You provide the API key and endpoint in Settings.
+
 ## Architecture
 
 ```
