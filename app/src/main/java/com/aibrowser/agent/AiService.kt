@@ -7,9 +7,12 @@ import com.aibrowser.data.models.ModelInfo
 import com.google.gson.Gson
 import com.google.gson.JsonParser
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.Response
+import java.io.IOException
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -45,7 +48,7 @@ class AiService @Inject constructor(
             val requestBody = buildRequestBody(config, messages)
             val request = buildRequest(config, requestBody)
 
-            client.newCall(request).execute().use { response ->
+            executeWithRetry(request).use { response ->
                 if (!response.isSuccessful) {
                     val error = response.body?.string() ?: "Unknown error"
                     onEvent(StreamEvent.Error("API error ${response.code}: $error"))
@@ -57,10 +60,23 @@ class AiService @Inject constructor(
                 onEvent(StreamEvent.Done(fullResponse))
                 fullResponse
             }
-        } catch (e: Exception) {
+        } catch (e: IOException) {
             onEvent(StreamEvent.Error("Network error: ${e.message}"))
             ""
         }
+    }
+
+    private suspend fun executeWithRetry(request: Request): Response {
+        var lastException: IOException? = null
+        repeat(3) { attempt ->
+            try {
+                return client.newCall(request).execute()
+            } catch (e: IOException) {
+                lastException = e
+                if (attempt < 2) delay((1000L shl attempt))
+            }
+        }
+        throw lastException ?: IOException("Request failed after 3 retries")
     }
 
     private fun buildRequestBody(config: ApiConfig, messages: List<Message>): String {

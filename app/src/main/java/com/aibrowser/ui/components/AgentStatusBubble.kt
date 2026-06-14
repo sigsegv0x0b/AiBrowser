@@ -58,7 +58,7 @@ fun AgentStatusBubble(
                     strokeWidth = 2.dp
                 )
                 Spacer(Modifier.width(8.dp))
-                Column(modifier = Modifier.weight(1f).heightIn(max = 200.dp)) {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "Executing...",
                         style = MaterialTheme.typography.bodySmall,
@@ -68,7 +68,7 @@ fun AgentStatusBubble(
                         overflow = TextOverflow.Ellipsis
                     )
                     Spacer(Modifier.height(4.dp))
-                    Column(modifier = Modifier.verticalScroll(scrollState)) {
+                    Column(modifier = Modifier.heightIn(max = 180.dp).verticalScroll(scrollState)) {
                         actionHistory.forEach { action ->
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(
