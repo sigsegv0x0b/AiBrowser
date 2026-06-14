@@ -16,6 +16,25 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import com.aibrowser.data.models.ToolCall
 
+private fun describeToolCall(name: String, args: Map<String, Any>): String {
+    return when (name) {
+        "browser_navigate" -> "Navigate to ${args["url"]}"
+        "browser_navigate_back" -> "Go back"
+        "browser_click" -> "Click ${args["target"]}${if (args["doubleClick"] == true) " (double)" else ""}"
+        "browser_type" -> "Type \"${args["text"]}\" into ${args["target"]}"
+        "browser_fill_form" -> "Fill form (${(args["fields"] as? List<*>)?.size ?: 0} fields)"
+        "browser_select_option" -> "Select ${args["values"]} on ${args["target"]}"
+        "browser_hover" -> "Hover ${args["target"]}"
+        "browser_press_key" -> "Press key: ${args["key"]}"
+        "browser_snapshot" -> "Snapshot page (depth=${args["depth"]}, boxes=${args["boxes"]})"
+        "browser_take_screenshot" -> "Take screenshot"
+        "browser_evaluate" -> "Run JS: ${(args["function"] as? String)?.take(80)}"
+        "browser_wait_for" -> "Wait for \"${args["text"]}\""
+        "browser_tabs" -> "Tab action: ${args["action"]}${args["url"]?.let { " → $it" } ?: ""}"
+        else -> "$name(${args.entries.joinToString { "${it.key}=${it.value}" }})"
+    }
+}
+
 @Composable
 fun ToolCallCard(
     toolCall: ToolCall,
@@ -37,6 +56,10 @@ fun ToolCallCard(
         ToolCall.ToolStatus.ERROR -> "\u2717"
     }
 
+    val description = remember(toolCall.name, toolCall.arguments) {
+        describeToolCall(toolCall.name, toolCall.arguments)
+    }
+
     Column(
         modifier = modifier
             .widthIn(max = 300.dp)
@@ -51,12 +74,18 @@ fun ToolCallCard(
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text(text = statusIcon, style = MaterialTheme.typography.labelSmall)
-            Text(
-                text = toolCall.name,
-                style = MaterialTheme.typography.labelMedium,
-                color = statusColor,
-                modifier = Modifier.weight(1f)
-            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = statusColor
+                )
+                Text(
+                    text = toolCall.name.replace("browser_", ""),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                )
+            }
             Icon(
                 imageVector = if (expanded) Icons.Default.KeyboardArrowUp
                               else Icons.Default.KeyboardArrowDown,

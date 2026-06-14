@@ -2,21 +2,29 @@ package com.aibrowser.ui.screens
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.aibrowser.agent.AiService
 import com.aibrowser.data.SettingsRepository
 import com.aibrowser.data.models.ApiConfig
+import com.aibrowser.data.models.ModelInfo
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     settingsRepository: SettingsRepository,
+    aiService: AiService,
     onBack: () -> Unit
 ) {
     val config by settingsRepository.apiConfig.collectAsState(initial = ApiConfig())
@@ -24,7 +32,18 @@ fun SettingsScreen(
     var apiKey by remember(config) { mutableStateOf(config.apiKey) }
     var model by remember(config) { mutableStateOf(config.model) }
     var baseUrl by remember(config) { mutableStateOf(config.baseUrl) }
+    var contextSize by remember(config) { mutableStateOf(config.contextSize.toString()) }
+    var maxOutputTokens by remember(config) { mutableStateOf(config.maxOutputTokens.toString()) }
+    var useCustomModel by remember(config) { mutableStateOf(config.model.isNotEmpty() && config.provider != ApiConfig.ApiProvider.CLAUDE) }
+
+    var fetchedModels by remember { mutableStateOf<List<ModelInfo>>(emptyList()) }
+    var isFetching by remember { mutableStateOf(false) }
+    var isTesting by remember { mutableStateOf(false) }
+    var testResult by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    val focusManager = LocalFocusManager.current
+
+    val currentConfig = ApiConfig(provider = provider, apiKey = apiKey, model = model, baseUrl = baseUrl)
 
     Scaffold(
         topBar = {
@@ -32,7 +51,7 @@ fun SettingsScreen(
                 title = { Text("Settings") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 }
             )
@@ -70,6 +89,11 @@ fun SettingsScreen(
                                 provider = p
                                 model = p.defaultModel
                                 baseUrl = p.defaultBaseUrl
+                                contextSize = ""
+                                maxOutputTokens = ""
+                                useCustomModel = false
+                                fetchedModels = emptyList()
+                                testResult = null
                                 expanded = false
                             }
                         )
@@ -79,33 +103,191 @@ fun SettingsScreen(
 
             OutlinedTextField(
                 value = apiKey,
-                onValueChange = { apiKey = it },
+                onValueChange = { apiKey = it; testResult = null },
                 label = { Text("API Key") },
                 modifier = Modifier.fillMaxWidth(),
-                singleLine = true
-            )
-
-            OutlinedTextField(
-                value = model,
-                onValueChange = { model = it },
-                label = { Text("Model") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() })
             )
 
             OutlinedTextField(
                 value = baseUrl,
-                onValueChange = { baseUrl = it },
+                onValueChange = { baseUrl = it; testResult = null },
                 label = { Text("Base URL") },
                 modifier = Modifier.fillMaxWidth(),
-                singleLine = true
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() })
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(
+                    onClick = {
+                        scope.launch {
+                            isFetching = true
+                            testResult = null
+                            fetchedModels = aiService.listModels(currentConfig)
+                            if (fetchedModels.isEmpty()) {
+                                testResult = "No models found or endpoint not supported"
+                            }
+                            isFetching = false
+                        }
+                    },
+                    enabled = !isFetching && provider != ApiConfig.ApiProvider.CLAUDE && apiKey.isNotBlank(),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    if (isFetching) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    } else {
+                        Text("Fetch Models")
+                    }
+                }
+
+                Button(
+                    onClick = {
+                        scope.launch {
+                            isTesting = true
+                            testResult = null
+                            val result = aiService.testConnection(currentConfig)
+                            testResult = result
+                            isTesting = false
+                        }
+                    },
+                    enabled = !isTesting && model.isNotBlank() && apiKey.isNotBlank(),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    if (isTesting) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    } else {
+                        Text("Test")
+                    }
+                }
+            }
+
+            if (testResult != null) {
+                val isError = testResult!!.startsWith("Error")
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (isError) MaterialTheme.colorScheme.errorContainer
+                        else MaterialTheme.colorScheme.primaryContainer
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = testResult ?: "",
+                        modifier = Modifier.padding(12.dp),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+
+            Text("Model", style = MaterialTheme.typography.titleMedium)
+
+            if (fetchedModels.isNotEmpty()) {
+                var modelExpanded by remember { mutableStateOf(false) }
+                val modelIds = remember(fetchedModels) { fetchedModels.map { it.id } }
+                val displayItems = remember(fetchedModels, useCustomModel) {
+                    val items = modelIds.toMutableList()
+                    if (useCustomModel && model !in modelIds && model.isNotBlank()) {
+                        items.add(0, model)
+                    }
+                    items
+                }
+
+                ExposedDropdownMenuBox(
+                    expanded = modelExpanded,
+                    onExpandedChange = { modelExpanded = it }
+                ) {
+                    OutlinedTextField(
+                        value = model,
+                        onValueChange = {},
+                        readOnly = true,
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(modelExpanded) },
+                        modifier = Modifier.menuAnchor().fillMaxWidth(),
+                        label = { Text("Select Model") }
+                    )
+                    ExposedDropdownMenu(
+                        expanded = modelExpanded,
+                        onDismissRequest = { modelExpanded = false }
+                    ) {
+                        displayItems.forEach { m ->
+                            DropdownMenuItem(
+                                text = { Text(m) },
+                                onClick = {
+                                    model = m
+                                    useCustomModel = false
+                                    modelExpanded = false
+                                    val info = fetchedModels.find { it.id == m }
+                                    if (info != null) {
+                                        if (info.contextSize != null) contextSize = info.contextSize.toString()
+                                        if (info.maxOutput != null) maxOutputTokens = info.maxOutput.toString()
+                                    }
+                                }
+                            )
+                        }
+                        DropdownMenuItem(
+                            text = { Text("Custom...") },
+                            onClick = {
+                                useCustomModel = true
+                                modelExpanded = false
+                            }
+                        )
+                    }
+                }
+            }
+
+            if (useCustomModel || fetchedModels.isEmpty()) {
+                OutlinedTextField(
+                    value = model,
+                    onValueChange = { model = it },
+                    label = { Text(if (fetchedModels.isEmpty()) "Model" else "Custom Model") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() })
+                )
+            }
+
+            Text("Context Size (tokens)", style = MaterialTheme.typography.titleMedium)
+            OutlinedTextField(
+                value = contextSize,
+                onValueChange = { contextSize = it.filter { c -> c.isDigit() } },
+                label = { Text("e.g. 128000") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+                keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
+                placeholder = { Text("Auto") }
+            )
+
+            Text("Max Output Tokens", style = MaterialTheme.typography.titleMedium)
+            OutlinedTextField(
+                value = maxOutputTokens,
+                onValueChange = { maxOutputTokens = it.filter { c -> c.isDigit() } },
+                label = { Text("e.g. 8192") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
+                placeholder = { Text("Auto") }
             )
 
             Button(
                 onClick = {
                     scope.launch {
                         settingsRepository.saveApiConfig(
-                            ApiConfig(provider = provider, apiKey = apiKey, model = model, baseUrl = baseUrl)
+                            ApiConfig(
+                                provider = provider,
+                                apiKey = apiKey,
+                                model = model,
+                                baseUrl = baseUrl,
+                                contextSize = contextSize.toIntOrNull() ?: 0,
+                                maxOutputTokens = maxOutputTokens.toIntOrNull() ?: 0
+                            )
                         )
                         onBack()
                     }

@@ -3,6 +3,7 @@ package com.aibrowser.agent
 import com.aibrowser.data.SettingsRepository
 import com.aibrowser.data.models.ApiConfig
 import com.aibrowser.data.models.Message
+import com.aibrowser.data.models.ModelInfo
 import com.google.gson.Gson
 import com.google.gson.JsonParser
 import kotlinx.coroutines.Dispatchers
@@ -64,7 +65,7 @@ class AiService @Inject constructor(
 
     private fun buildRequestBody(config: ApiConfig, messages: List<Message>): String {
         val apiMessages = messages.map { msg ->
-            mapOf(
+            val entry = mutableMapOf<String, Any?>(
                 "role" to when (msg.role) {
                     Message.Role.USER -> "user"
                     Message.Role.ASSISTANT -> "assistant"
@@ -73,6 +74,25 @@ class AiService @Inject constructor(
                 },
                 "content" to msg.content
             )
+
+            if (msg.role == Message.Role.ASSISTANT && msg.toolCalls.isNotEmpty()) {
+                entry["tool_calls"] = msg.toolCalls.map { tc ->
+                    mapOf(
+                        "id" to tc.id,
+                        "type" to "function",
+                        "function" to mapOf(
+                            "name" to tc.name,
+                            "arguments" to gson.toJson(tc.arguments)
+                        )
+                    )
+                }
+            }
+
+            if (msg.role == Message.Role.TOOL && msg.toolCallId != null) {
+                entry["tool_call_id"] = msg.toolCallId
+            }
+
+            entry
         }
 
         val body = mutableMapOf<String, Any>(
@@ -81,6 +101,10 @@ class AiService @Inject constructor(
             "tools" to ToolDefinitions.getToolsForApi(),
             "tool_choice" to "auto"
         )
+
+        if (config.provider != ApiConfig.ApiProvider.CLAUDE) {
+            body["stream"] = true
+        }
 
         return gson.toJson(body)
     }
@@ -108,15 +132,138 @@ class AiService @Inject constructor(
         return builder.build()
     }
 
+    suspend fun testConnection(config: ApiConfig): String = withContext(Dispatchers.IO) {
+        if (config.apiKey.isBlank()) return@withContext "Error: API key is empty"
+
+        try {
+            val url = when (config.provider) {
+                ApiConfig.ApiProvider.CLAUDE -> "${config.baseUrl}/v1/messages"
+                else -> "${config.baseUrl}/chat/completions"
+            }
+
+            val body = when (config.provider) {
+                ApiConfig.ApiProvider.CLAUDE -> gson.toJson(
+                    mapOf("model" to config.model, "messages" to listOf(mapOf("role" to "user", "content" to "hi")), "max_tokens" to 1)
+                )
+                else -> gson.toJson(
+                    mapOf("model" to config.model, "messages" to listOf(mapOf("role" to "user", "content" to "hi")), "max_tokens" to 1, "stream" to false)
+                )
+            }
+
+            val requestBuilder = Request.Builder()
+                .url(url)
+                .post(body.toRequestBody("application/json".toMediaType()))
+
+            when (config.provider) {
+                ApiConfig.ApiProvider.OPENAI, ApiConfig.ApiProvider.CUSTOM -> {
+                    requestBuilder.addHeader("Authorization", "Bearer ${config.apiKey}")
+                }
+                ApiConfig.ApiProvider.CLAUDE -> {
+                    requestBuilder.addHeader("x-api-key", config.apiKey)
+                    requestBuilder.addHeader("anthropic-version", "2023-06-01")
+                }
+            }
+
+            client.newCall(requestBuilder.build()).execute().use { response ->
+                if (response.isSuccessful) {
+                    "OK (${response.code})"
+                } else {
+                    val error = response.body?.string() ?: "Unknown error"
+                    "Error ${response.code}: ${error.take(200)}"
+                }
+            }
+        } catch (e: Exception) {
+            "Error: ${e.message}"
+        }
+    }
+
+    suspend fun listModels(config: ApiConfig): List<ModelInfo> = withContext(Dispatchers.IO) {
+        if (config.provider == ApiConfig.ApiProvider.CLAUDE) return@withContext emptyList()
+
+        try {
+            val url = "${config.baseUrl}/models"
+            val request = Request.Builder()
+                .url(url)
+                .addHeader("Authorization", "Bearer ${config.apiKey}")
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@withContext emptyList()
+                val body = response.body?.string() ?: return@withContext emptyList()
+                val json = JsonParser.parseString(body).asJsonObject
+                val data = json.getAsJsonArray("data") ?: return@withContext emptyList()
+                data.map { modelObj ->
+                    val obj = modelObj.asJsonObject
+                    ModelInfo(
+                        id = obj.get("id").asString,
+                        contextSize = parseNullableInt(obj, "context_length")
+                            ?: parseNullableInt(obj, "context_size")
+                            ?: parseNullableInt(obj, "max_context_length")
+                            ?: parseNullableInt(obj, "max_context"),
+                        maxOutput = parseNullableInt(obj, "max_output")
+                            ?: parseNullableInt(obj, "max_tokens")
+                            ?: parseNullableInt(obj, "max_output_tokens")
+                    )
+                }.sortedBy { it.id }
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun parseNullableInt(obj: com.google.gson.JsonObject, key: String): Int? {
+        return try {
+            val el = obj.get(key)
+            if (el != null && !el.isJsonNull) el.asInt else null
+        } catch (_: Exception) { null }
+    }
+
     private fun parseStreamingResponse(body: String, onEvent: (StreamEvent) -> Unit): String {
-        val lines = body.lines()
+        if (!body.contains("data: ")) {
+            return parseNonStreamingResponse(body, onEvent)
+        }
+        return parseSSEResponse(body, onEvent)
+    }
+
+    private fun parseNonStreamingResponse(body: String, onEvent: (StreamEvent) -> Unit): String {
+        try {
+            val json = JsonParser.parseString(body).asJsonObject
+            val choices = json.getAsJsonArray("choices") ?: return ""
+            if (choices.size() == 0) return ""
+            val message = choices[0].asJsonObject.getAsJsonObject("message") ?: return ""
+            val content = message.get("content")?.asString ?: ""
+
+            if (content.isNotEmpty()) {
+                onEvent(StreamEvent.Token(content))
+            }
+
+            val toolCalls = message.getAsJsonArray("tool_calls")
+            if (toolCalls != null) {
+                for (tc in toolCalls) {
+                    val tcObj = tc.asJsonObject
+                    val id = tcObj.get("id")?.asString ?: continue
+                    val func = tcObj.getAsJsonObject("function") ?: continue
+                    val name = func.get("name")?.asString ?: continue
+                    val args = func.get("arguments")?.asString ?: "{}"
+                    onEvent(StreamEvent.ToolCallStart(id, name, args))
+                }
+            }
+
+            return content
+        } catch (e: Exception) {
+            onEvent(StreamEvent.Error("Parse error: ${e.message}"))
+            return ""
+        }
+    }
+
+    private fun parseSSEResponse(body: String, onEvent: (StreamEvent) -> Unit): String {
         var fullContent = ""
-        var inToolCall = false
         var toolCallId = ""
         var toolCallName = ""
-        var toolCallArgs = StringBuilder()
+        val toolCallArgs = StringBuilder()
+        var inToolCall = false
 
-        for (line in lines) {
+        for (line in body.lines()) {
             if (!line.startsWith("data: ")) continue
             val data = line.removePrefix("data: ").trim()
             if (data == "[DONE]") break
@@ -137,12 +284,15 @@ class AiService @Inject constructor(
                     val toolCalls = delta.getAsJsonArray("tool_calls")
                     for (tc in toolCalls) {
                         val tcObj = tc.asJsonObject
+                        val index = tcObj.get("index")?.asInt ?: 0
 
                         if (tcObj.has("id") && !tcObj.get("id").isJsonNull) {
                             if (inToolCall && toolCallId.isNotEmpty()) {
                                 onEvent(StreamEvent.ToolCallStart(toolCallId, toolCallName, toolCallArgs.toString()))
                             }
                             toolCallId = tcObj.get("id").asString
+                            toolCallName = ""
+                            toolCallArgs.clear()
                             inToolCall = true
                         }
 
