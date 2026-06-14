@@ -1,6 +1,7 @@
 package com.aibrowser.agent;
 
 import com.aibrowser.browser.TabManager;
+import com.aibrowser.data.SettingsRepository;
 import dagger.internal.DaggerGenerated;
 import dagger.internal.Factory;
 import dagger.internal.Provider;
@@ -28,24 +29,31 @@ import javax.annotation.processing.Generated;
 public final class ToolExecutor_Factory implements Factory<ToolExecutor> {
   private final Provider<TabManager> tabManagerProvider;
 
-  public ToolExecutor_Factory(Provider<TabManager> tabManagerProvider) {
+  private final Provider<SettingsRepository> settingsRepositoryProvider;
+
+  public ToolExecutor_Factory(Provider<TabManager> tabManagerProvider,
+      Provider<SettingsRepository> settingsRepositoryProvider) {
     this.tabManagerProvider = tabManagerProvider;
+    this.settingsRepositoryProvider = settingsRepositoryProvider;
   }
 
   @Override
   public ToolExecutor get() {
-    return newInstance(tabManagerProvider.get());
+    return newInstance(tabManagerProvider.get(), settingsRepositoryProvider.get());
   }
 
-  public static ToolExecutor_Factory create(javax.inject.Provider<TabManager> tabManagerProvider) {
-    return new ToolExecutor_Factory(Providers.asDaggerProvider(tabManagerProvider));
+  public static ToolExecutor_Factory create(javax.inject.Provider<TabManager> tabManagerProvider,
+      javax.inject.Provider<SettingsRepository> settingsRepositoryProvider) {
+    return new ToolExecutor_Factory(Providers.asDaggerProvider(tabManagerProvider), Providers.asDaggerProvider(settingsRepositoryProvider));
   }
 
-  public static ToolExecutor_Factory create(Provider<TabManager> tabManagerProvider) {
-    return new ToolExecutor_Factory(tabManagerProvider);
+  public static ToolExecutor_Factory create(Provider<TabManager> tabManagerProvider,
+      Provider<SettingsRepository> settingsRepositoryProvider) {
+    return new ToolExecutor_Factory(tabManagerProvider, settingsRepositoryProvider);
   }
 
-  public static ToolExecutor newInstance(TabManager tabManager) {
-    return new ToolExecutor(tabManager);
+  public static ToolExecutor newInstance(TabManager tabManager,
+      SettingsRepository settingsRepository) {
+    return new ToolExecutor(tabManager, settingsRepository);
   }
 }

@@ -25,6 +25,7 @@ import hilt_aggregated_deps._com_aibrowser_browser_BrowserViewModel_HiltModules_
 import hilt_aggregated_deps._com_aibrowser_browser_BrowserViewModel_HiltModules_KeyModule;
 import hilt_aggregated_deps._com_aibrowser_di_AppModule;
 import hilt_aggregated_deps._com_aibrowser_di_NetworkModule;
+import hilt_aggregated_deps._com_aibrowser_service_AgentForegroundService_GeneratedInjector;
 import hilt_aggregated_deps._dagger_hilt_android_flags_FragmentGetContextFix_FragmentGetContextFixEntryPoint;
 import hilt_aggregated_deps._dagger_hilt_android_flags_HiltWrapper_FragmentGetContextFix_FragmentGetContextFixModule;
 import hilt_aggregated_deps._dagger_hilt_android_internal_lifecycle_DefaultViewModelFactories_ActivityEntryPoint;
@@ -73,6 +74,7 @@ import hilt_aggregated_deps._dagger_hilt_android_internal_modules_HiltWrapper_Ac
         _com_aibrowser_browser_BrowserViewModel_HiltModules_KeyModule.class,
         _com_aibrowser_di_AppModule.class,
         _com_aibrowser_di_NetworkModule.class,
+        _com_aibrowser_service_AgentForegroundService_GeneratedInjector.class,
         _dagger_hilt_android_flags_FragmentGetContextFix_FragmentGetContextFixEntryPoint.class,
         _dagger_hilt_android_flags_HiltWrapper_FragmentGetContextFix_FragmentGetContextFixModule.class,
         _dagger_hilt_android_internal_lifecycle_DefaultViewModelFactories_ActivityEntryPoint.class,

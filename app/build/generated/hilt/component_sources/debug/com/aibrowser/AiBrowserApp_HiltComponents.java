@@ -4,6 +4,7 @@ import com.aibrowser.agent.AgentViewModel_HiltModules;
 import com.aibrowser.browser.BrowserViewModel_HiltModules;
 import com.aibrowser.di.AppModule;
 import com.aibrowser.di.NetworkModule;
+import com.aibrowser.service.AgentForegroundService_GeneratedInjector;
 import dagger.Binds;
 import dagger.Component;
 import dagger.Module;
@@ -147,7 +148,8 @@ public final class AiBrowserApp_HiltComponents {
 
   @Subcomponent
   @ServiceScoped
-  public abstract static class ServiceC implements ServiceComponent,
+  public abstract static class ServiceC implements AgentForegroundService_GeneratedInjector,
+      ServiceComponent,
       GeneratedComponent {
     @Subcomponent.Builder
     abstract interface Builder extends ServiceComponentBuilder {

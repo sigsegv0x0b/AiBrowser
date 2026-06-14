@@ -5,6 +5,7 @@ import android.content.Intent
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.aibrowser.browser.TabManager
 import com.aibrowser.data.SettingsRepository
 import com.aibrowser.data.models.BehaviorConfig
 import com.aibrowser.data.models.Message
@@ -29,6 +30,7 @@ class AgentViewModel @Inject constructor(
     private val aiService: AiService,
     private val mcpController: McpController,
     private val settingsRepository: SettingsRepository,
+    private val tabManager: TabManager,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -49,6 +51,7 @@ class AgentViewModel @Inject constructor(
 
     private val gson = Gson()
 
+    private var currentTabId: String? = null
     private var systemPromptContent: String = BehaviorConfig.DEFAULT_SYSTEM_PROMPT
     private var ttsPromptContent: String = BehaviorConfig.DEFAULT_TTS_PROMPT
 
@@ -104,10 +107,13 @@ class AgentViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            val config = settingsRepository.behaviorConfig.first()
-            systemPromptContent = config.systemPrompt
-            ttsPromptContent = config.ttsPrompt
-            _messages.value = listOf(createSystemMessage())
+            tabManager.activeTabId.collect { newTabId ->
+                if (newTabId != null && newTabId != currentTabId) {
+                    saveToTab(currentTabId)
+                    currentTabId = newTabId
+                    loadFromTab(newTabId)
+                }
+            }
         }
 
         viewModelScope.launch {
@@ -120,6 +126,7 @@ class AgentViewModel @Inject constructor(
     }
 
     fun sendMessage(content: String) {
+        val tabId = currentTabId ?: return
         if (content.isBlank() || _isLoading.value) return
 
         val userMessage = Message(
@@ -127,21 +134,23 @@ class AgentViewModel @Inject constructor(
             role = Message.Role.USER,
             content = content
         )
-        _messages.value = _messages.value + userMessage
+        tabAppendMessage(tabId, userMessage)
         _actionHistory.value = emptyList()
         _currentAction.value = "Thinking..."
         _isLoading.value = true
+        saveToTab(tabId)
 
         viewModelScope.launch {
             val assistantContent = StringBuilder()
             val toolCalls = mutableListOf<ToolCall>()
             val assistantId = UUID.randomUUID().toString()
 
-            aiService.sendMessage(_messages.value) { event ->
+            val messages = tabManager.getTab(tabId)?.messages ?: return@launch
+            aiService.sendMessage(messages) { event ->
                 when (event) {
                     is AiService.StreamEvent.Token -> {
                         assistantContent.append(event.text)
-                        upsertAssistantMessage(assistantId, assistantContent.toString(), toolCalls)
+                        tabUpsertAssistantMessage(tabId, assistantId, assistantContent.toString(), toolCalls)
                     }
                     is AiService.StreamEvent.ToolCallStart -> {
                         val args = try {
@@ -154,31 +163,31 @@ class AgentViewModel @Inject constructor(
                         toolCalls.add(
                             ToolCall(event.id, event.name, args, ToolCall.ToolStatus.PENDING)
                         )
-                        upsertAssistantMessage(assistantId, assistantContent.toString(), toolCalls)
+                        tabUpsertAssistantMessage(tabId, assistantId, assistantContent.toString(), toolCalls)
                     }
                     is AiService.StreamEvent.Done -> {
                         if (assistantContent.isNotEmpty() || toolCalls.isNotEmpty()) {
-                            upsertAssistantMessage(assistantId, assistantContent.toString(), toolCalls)
+                            tabUpsertAssistantMessage(tabId, assistantId, assistantContent.toString(), toolCalls)
 
                             if (toolCalls.isNotEmpty()) {
-                                viewModelScope.launch { executeToolCalls(toolCalls) }
+                                viewModelScope.launch { executeToolCalls(tabId, toolCalls) }
                             } else {
-                                _isLoading.value = false
+                                tabSetLoading(tabId, false)
                             }
                         } else {
-                            _isLoading.value = false
+                            tabSetLoading(tabId, false)
                         }
                     }
                     is AiService.StreamEvent.Error -> {
                         val isNetworkError = event.message.startsWith("Network error")
-                        upsertAssistantMessage(assistantId, assistantContent.toString().ifEmpty {
-                            if (isNetworkError) "Network error — tap Resume to retry" else "Error: ${event.message}"
-                        }, toolCalls)
+                        val fallback = if (isNetworkError) "Network error — tap Resume to retry" else "Error: ${event.message}"
+                        val msg = if (assistantContent.isNotEmpty()) assistantContent.toString() else fallback
+                        tabUpsertAssistantMessage(tabId, assistantId, msg, toolCalls)
                         if (isNetworkError) {
-                            _isPaused.value = true
-                            _isLoading.value = false
+                            tabSetPaused(tabId, true)
+                            tabSetLoading(tabId, false)
                         } else {
-                            _isLoading.value = false
+                            tabSetLoading(tabId, false)
                         }
                     }
                 }
@@ -186,72 +195,123 @@ class AgentViewModel @Inject constructor(
         }
     }
 
-    private fun upsertAssistantMessage(id: String, content: String, toolCalls: List<ToolCall>) {
-        val existing = _messages.value.indexOfFirst { it.id == id }
-        val msg = Message(id = id, role = Message.Role.ASSISTANT, content = content, toolCalls = toolCalls)
-        if (existing >= 0) {
-            _messages.value = _messages.value.toMutableList().apply { set(existing, msg) }
-        } else {
-            _messages.value = _messages.value + msg
-        }
+    private fun tabAppendMessage(tabId: String, message: Message) {
+        tabManager.updateTab(tabId) { it.copy(messages = it.messages + message) }
+        syncFlowsFromTab(tabId)
     }
 
-    private suspend fun executeToolCalls(toolCalls: List<ToolCall>) {
-        for (toolCall in toolCalls) {
-            if (_currentAction.value.isNotBlank()) {
-                _actionHistory.value = _actionHistory.value + _currentAction.value
+    private fun tabUpsertAssistantMessage(tabId: String, id: String, content: String, toolCalls: List<ToolCall>) {
+        tabManager.updateTab(tabId) { tab ->
+            val existing = tab.messages.indexOfFirst { it.id == id }
+            val msg = Message(id = id, role = Message.Role.ASSISTANT, content = content, toolCalls = toolCalls)
+            val newMessages = if (existing >= 0) {
+                tab.messages.toMutableList().apply { set(existing, msg) }
+            } else {
+                tab.messages + msg
             }
-            _currentAction.value = describeToolCall(toolCall.name, toolCall.arguments)
-            updateToolCallStatus(toolCall.id, ToolCall.ToolStatus.RUNNING)
-            val result = mcpController.executeToolCall(toolCall)
-            updateToolCallStatus(toolCall.id, result.status, result.result)
+            tab.copy(messages = newMessages)
+        }
+        syncFlowsFromTab(tabId)
+    }
 
-            _messages.value = _messages.value + Message(
+    private fun tabAppendToolResult(tabId: String, content: String, toolCallId: String) {
+        tabManager.updateTab(tabId) { tab ->
+            tab.copy(messages = tab.messages + Message(
                 id = UUID.randomUUID().toString(),
                 role = Message.Role.TOOL,
-                content = result.result ?: "No result",
-                toolCallId = toolCall.id
-            )
+                content = content,
+                toolCallId = toolCallId
+            ))
+        }
+        syncFlowsFromTab(tabId)
+    }
+
+    private fun tabUpdateToolCallStatus(tabId: String, id: String, status: ToolCall.ToolStatus, result: String? = null) {
+        tabManager.updateTab(tabId) { tab ->
+            tab.copy(messages = tab.messages.map { msg ->
+                msg.copy(
+                    toolCalls = msg.toolCalls.map { tc ->
+                        if (tc.id == id) tc.copy(status = status, result = result ?: tc.result) else tc
+                    }
+                )
+            })
+        }
+        syncFlowsFromTab(tabId)
+    }
+
+    private fun tabSetLoading(tabId: String, loading: Boolean) {
+        tabManager.updateTab(tabId) { it.copy(agentIsLoading = loading) }
+        if (tabId == currentTabId) _isLoading.value = loading
+    }
+
+    private fun tabSetPaused(tabId: String, paused: Boolean) {
+        tabManager.updateTab(tabId) { it.copy(isPaused = paused) }
+        if (tabId == currentTabId) _isPaused.value = paused
+    }
+
+    private fun syncFlowsFromTab(tabId: String) {
+        if (tabId == currentTabId) {
+            val tab = tabManager.getTab(tabId)
+            if (tab != null) {
+                _messages.value = tab.messages
+                _isLoading.value = tab.agentIsLoading
+                _currentAction.value = tab.currentAction
+                _actionHistory.value = tab.actionHistory
+                _isPaused.value = tab.isPaused
+            }
+        }
+    }
+
+    private fun tabSetCurrentAction(tabId: String, action: String) {
+        tabManager.updateTab(tabId) { it.copy(currentAction = action) }
+        if (tabId == currentTabId) _currentAction.value = action
+    }
+
+    private fun tabAppendActionHistory(tabId: String, action: String) {
+        tabManager.updateTab(tabId) { it.copy(actionHistory = it.actionHistory + action) }
+        if (tabId == currentTabId) {
+            val tab = tabManager.getTab(tabId)
+            if (tab != null) _actionHistory.value = tab.actionHistory
+        }
+    }
+
+    private suspend fun executeToolCalls(tabId: String, toolCalls: List<ToolCall>) {
+        for (toolCall in toolCalls) {
+            val prevAction = tabManager.getTab(tabId)?.currentAction ?: ""
+            if (prevAction.isNotBlank()) {
+                tabAppendActionHistory(tabId, prevAction)
+            }
+            tabSetCurrentAction(tabId, describeToolCall(toolCall.name, toolCall.arguments))
+            tabUpdateToolCallStatus(tabId, toolCall.id, ToolCall.ToolStatus.RUNNING)
+            val result = mcpController.executeToolCall(toolCall)
+            tabUpdateToolCallStatus(tabId, toolCall.id, result.status, result.result)
+            tabAppendToolResult(tabId, result.result ?: "No result", toolCall.id)
         }
 
-        if (_currentAction.value.isNotBlank()) {
-            _actionHistory.value = _actionHistory.value + _currentAction.value
+        val prevAction = tabManager.getTab(tabId)?.currentAction ?: ""
+        if (prevAction.isNotBlank()) {
+            tabAppendActionHistory(tabId, prevAction)
         }
-        _currentAction.value = ""
-        if (toolCalls.isNotEmpty() && !_isPaused.value) {
-            sendFollowUp()
+        tabSetCurrentAction(tabId, "")
+        val paused = tabManager.getTab(tabId)?.isPaused ?: false
+        if (toolCalls.isNotEmpty() && !paused) {
+            sendFollowUp(tabId)
         } else if (toolCalls.isNotEmpty()) {
-            _isLoading.value = false
+            tabSetLoading(tabId, false)
         }
     }
 
-    fun pause() {
-        _isPaused.value = true
-    }
-
-    fun resume(content: String) {
-        if (content.isBlank()) return
-        _isPaused.value = false
-        _isLoading.value = true
-        val userMessage = Message(
-            id = UUID.randomUUID().toString(),
-            role = Message.Role.USER,
-            content = content
-        )
-        _messages.value = _messages.value + userMessage
-        viewModelScope.launch { sendFollowUp() }
-    }
-
-    private suspend fun sendFollowUp() {
+    private suspend fun sendFollowUp(tabId: String) {
         val followUpContent = StringBuilder()
         val followUpToolCalls = mutableListOf<ToolCall>()
         val followUpId = UUID.randomUUID().toString()
 
-        aiService.sendMessage(_messages.value) { event ->
+        val messages = tabManager.getTab(tabId)?.messages ?: return
+        aiService.sendMessage(messages) { event ->
             when (event) {
                 is AiService.StreamEvent.Token -> {
                     followUpContent.append(event.text)
-                    upsertAssistantMessage(followUpId, followUpContent.toString(), followUpToolCalls)
+                    tabUpsertAssistantMessage(tabId, followUpId, followUpContent.toString(), followUpToolCalls)
                 }
                 is AiService.StreamEvent.ToolCallStart -> {
                     val args = try {
@@ -262,54 +322,122 @@ class AgentViewModel @Inject constructor(
                             }.toMap()
                     } catch (_: Exception) { emptyMap() }
                     followUpToolCalls.add(ToolCall(event.id, event.name, args, ToolCall.ToolStatus.PENDING))
-                    upsertAssistantMessage(followUpId, followUpContent.toString(), followUpToolCalls)
+                    tabUpsertAssistantMessage(tabId, followUpId, followUpContent.toString(), followUpToolCalls)
                 }
                 is AiService.StreamEvent.Done -> {
-                    if (followUpContent.isNotEmpty()) {
-                        upsertAssistantMessage(followUpId, followUpContent.toString(), followUpToolCalls)
-                    } else if (followUpToolCalls.isNotEmpty()) {
-                        upsertAssistantMessage(followUpId, "", followUpToolCalls)
-                    } else {
-                        upsertAssistantMessage(followUpId, "(no response)", followUpToolCalls)
+                    val finalContent = when {
+                        followUpContent.isNotEmpty() -> followUpContent.toString()
+                        followUpToolCalls.isNotEmpty() -> ""
+                        else -> "(no response)"
                     }
-                    if (followUpToolCalls.isNotEmpty() && !_isPaused.value) {
-                        viewModelScope.launch { executeToolCalls(followUpToolCalls) }
+                    tabUpsertAssistantMessage(tabId, followUpId, finalContent, followUpToolCalls)
+                    if (followUpToolCalls.isNotEmpty()) {
+                        val paused = tabManager.getTab(tabId)?.isPaused ?: false
+                        if (!paused) {
+                            viewModelScope.launch { executeToolCalls(tabId, followUpToolCalls) }
+                        } else {
+                            tabSetLoading(tabId, false)
+                        }
                     } else {
-                        if (!_isPaused.value) _isLoading.value = false
+                        tabSetLoading(tabId, false)
                     }
                 }
                 is AiService.StreamEvent.Error -> {
                     val isNetworkError = event.message.startsWith("Network error")
-                    upsertAssistantMessage(followUpId, followUpContent.toString().ifEmpty {
-                        if (isNetworkError) "Network error — tap Resume to retry" else "Error: ${event.message}"
-                    }, followUpToolCalls)
+                    val fallback = if (isNetworkError) "Network error — tap Resume to retry" else "Error: ${event.message}"
+                    val msg = if (followUpContent.isNotEmpty()) followUpContent.toString() else fallback
+                    tabUpsertAssistantMessage(tabId, followUpId, msg, followUpToolCalls)
                     if (isNetworkError) {
-                        _isPaused.value = true
-                        _isLoading.value = false
+                        tabSetPaused(tabId, true)
+                        tabSetLoading(tabId, false)
                     } else {
-                        _isLoading.value = false
+                        tabSetLoading(tabId, false)
                     }
                 }
             }
         }
     }
 
-    private fun updateToolCallStatus(id: String, status: ToolCall.ToolStatus, result: String? = null) {
-        _messages.value = _messages.value.map { msg ->
-            msg.copy(
-                toolCalls = msg.toolCalls.map { tc ->
-                    if (tc.id == id) tc.copy(status = status, result = result ?: tc.result) else tc
-                }
-            )
-        }
+    fun pause() {
+        val tabId = currentTabId ?: return
+        _isPaused.value = true
+        tabSetPaused(tabId, true)
+    }
+
+    fun resume(content: String) {
+        val tabId = currentTabId ?: return
+        if (content.isBlank()) return
+        _isPaused.value = false
+        _isLoading.value = true
+        tabSetPaused(tabId, false)
+        tabSetLoading(tabId, true)
+
+        val userMessage = Message(
+            id = UUID.randomUUID().toString(),
+            role = Message.Role.USER,
+            content = content
+        )
+        tabAppendMessage(tabId, userMessage)
+        viewModelScope.launch { sendFollowUp(tabId) }
     }
 
     fun clearChat() {
+        val tabId = currentTabId ?: return
         viewModelScope.launch {
             val config = settingsRepository.behaviorConfig.first()
             systemPromptContent = config.systemPrompt
             ttsPromptContent = config.ttsPrompt
-            _messages.value = listOf(createSystemMessage())
+            val freshMessages = listOf(createSystemMessage())
+            _messages.value = freshMessages
+            _isLoading.value = false
+            _currentAction.value = ""
+            _actionHistory.value = emptyList()
+            _isPaused.value = false
+            tabManager.updateTab(tabId) { it.copy(
+                messages = freshMessages,
+                agentIsLoading = false,
+                currentAction = "",
+                actionHistory = emptyList(),
+                isPaused = false
+            )}
+        }
+    }
+
+    private fun saveToTab(tabId: String?) {
+        val id = tabId ?: return
+        tabManager.updateTab(id) { it.copy(
+            messages = _messages.value,
+            agentIsLoading = _isLoading.value,
+            currentAction = _currentAction.value,
+            actionHistory = _actionHistory.value,
+            isPaused = _isPaused.value
+        )}
+    }
+
+    private fun loadFromTab(tabId: String) {
+        val tab = tabManager.getTab(tabId) ?: return
+        if (tab.messages.isEmpty()) {
+            viewModelScope.launch {
+                val config = settingsRepository.behaviorConfig.first()
+                systemPromptContent = config.systemPrompt
+                ttsPromptContent = config.ttsPrompt
+                val freshMessages = listOf(createSystemMessage())
+                _messages.value = freshMessages
+                _isLoading.value = tab.agentIsLoading
+                _currentAction.value = tab.currentAction
+                _actionHistory.value = tab.actionHistory
+                _isPaused.value = tab.isPaused
+                tabManager.updateTab(tabId) { it.copy(messages = freshMessages) }
+            }
+        } else {
+            _messages.value = tab.messages
+            _isLoading.value = tab.agentIsLoading
+            _currentAction.value = tab.currentAction
+            _actionHistory.value = tab.actionHistory
+            _isPaused.value = tab.isPaused
+            systemPromptContent = tab.messages.firstOrNull { it.role == Message.Role.SYSTEM }?.content
+                ?: BehaviorConfig.DEFAULT_SYSTEM_PROMPT
+            ttsPromptContent = BehaviorConfig.DEFAULT_TTS_PROMPT
         }
     }
 

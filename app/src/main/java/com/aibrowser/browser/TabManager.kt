@@ -4,6 +4,9 @@ import android.content.Context
 import android.webkit.WebView
 import com.aibrowser.agent.StealthInjector
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -15,8 +18,8 @@ class TabManager @Inject constructor(
     private val _tabs = mutableListOf<TabState>()
     val tabs: List<TabState> get() = _tabs.toList()
 
-    private var _activeTabId: String? = null
-    val activeTabId: String? get() = _activeTabId
+    private val _activeTabId = MutableStateFlow<String?>(null)
+    val activeTabId: StateFlow<String?> = _activeTabId.asStateFlow()
 
     fun createTab(url: String = "about:blank"): TabState {
         val id = UUID.randomUUID().toString().take(8)
@@ -32,7 +35,7 @@ class TabManager @Inject constructor(
         }
         val tab = TabState(id = id, url = url, webView = webView)
         _tabs.add(tab)
-        _activeTabId = id
+        _activeTabId.value = id
         if (url != "about:blank") {
             webView.loadUrl(url)
         }
@@ -43,18 +46,18 @@ class TabManager @Inject constructor(
         val tab = _tabs.find { it.id == id } ?: return
         tab.webView?.destroy()
         _tabs.removeAll { it.id == id }
-        if (_activeTabId == id) {
-            _activeTabId = _tabs.lastOrNull()?.id
+        if (_activeTabId.value == id) {
+            _activeTabId.value = _tabs.lastOrNull()?.id
         }
     }
 
     fun setActiveTab(id: String) {
         if (_tabs.any { it.id == id }) {
-            _activeTabId = id
+            _activeTabId.value = id
         }
     }
 
-    fun getActiveTab(): TabState? = _tabs.find { it.id == _activeTabId }
+    fun getActiveTab(): TabState? = _tabs.find { it.id == _activeTabId.value }
 
     fun getTab(id: String): TabState? = _tabs.find { it.id == id }
 

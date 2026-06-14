@@ -21,6 +21,7 @@ import com.aibrowser.browser.TabManager;
 import com.aibrowser.data.SettingsRepository;
 import com.aibrowser.di.AppModule_ProvideOkHttpClientFactory;
 import com.aibrowser.di.AppModule_ProvideSettingsRepositoryFactory;
+import com.aibrowser.service.AgentForegroundService;
 import com.google.errorprone.annotations.CanIgnoreReturnValue;
 import dagger.hilt.android.ActivityRetainedLifecycle;
 import dagger.hilt.android.ViewModelLifecycle;
@@ -470,7 +471,7 @@ public final class DaggerAiBrowserApp_HiltComponents_SingletonC {
       public T get() {
         switch (id) {
           case 0: // com.aibrowser.agent.AgentViewModel 
-          return (T) new AgentViewModel(singletonCImpl.aiServiceProvider.get(), singletonCImpl.mcpControllerProvider.get());
+          return (T) new AgentViewModel(singletonCImpl.aiServiceProvider.get(), singletonCImpl.mcpControllerProvider.get(), singletonCImpl.provideSettingsRepositoryProvider.get(), singletonCImpl.tabManagerProvider.get(), ApplicationContextModule_ProvideContextFactory.provideContext(singletonCImpl.applicationContextModule));
 
           case 1: // com.aibrowser.browser.BrowserViewModel 
           return (T) new BrowserViewModel(singletonCImpl.tabManagerProvider.get());
@@ -547,6 +548,10 @@ public final class DaggerAiBrowserApp_HiltComponents_SingletonC {
       this.singletonCImpl = singletonCImpl;
 
 
+    }
+
+    @Override
+    public void injectAgentForegroundService(AgentForegroundService arg0) {
     }
   }
 
@@ -629,7 +634,7 @@ public final class DaggerAiBrowserApp_HiltComponents_SingletonC {
           return (T) new McpController(singletonCImpl.toolExecutorProvider.get());
 
           case 4: // com.aibrowser.agent.ToolExecutor 
-          return (T) new ToolExecutor(singletonCImpl.tabManagerProvider.get());
+          return (T) new ToolExecutor(singletonCImpl.tabManagerProvider.get(), singletonCImpl.provideSettingsRepositoryProvider.get());
 
           case 5: // com.aibrowser.browser.TabManager 
           return (T) new TabManager(ApplicationContextModule_ProvideContextFactory.provideContext(singletonCImpl.applicationContextModule));

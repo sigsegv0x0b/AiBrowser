@@ -51,7 +51,7 @@ class BrowserViewModel @Inject constructor(
 
     fun refresh() {
         _tabs.value = tabManager.tabs
-        _activeTabId.value = tabManager.activeTabId
+        _activeTabId.value = tabManager.activeTabId.value
     }
 
     fun goBack() {
