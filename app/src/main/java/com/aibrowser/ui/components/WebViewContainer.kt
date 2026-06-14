@@ -39,6 +39,7 @@ fun WebViewContainer(
         update = { wrapperView ->
             tab.webView?.let { tabWebView ->
                 if (tabWebView.parent != wrapperView) {
+                    tabWebView.parent?.let { (it as ViewGroup).removeView(tabWebView) }
                     wrapperView.removeAllViews()
                     wrapperView.addView(tabWebView)
                 }
