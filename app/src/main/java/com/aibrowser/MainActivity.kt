@@ -10,6 +10,7 @@ import androidx.compose.ui.Modifier
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.compose.rememberNavController
 import com.aibrowser.agent.AgentViewModel
+import com.aibrowser.agent.AiService
 import com.aibrowser.browser.BrowserViewModel
 import com.aibrowser.data.SettingsRepository
 import com.aibrowser.ui.navigation.NavGraph
@@ -22,6 +23,9 @@ class MainActivity : ComponentActivity() {
 
     @Inject
     lateinit var settingsRepository: SettingsRepository
+
+    @Inject
+    lateinit var aiService: AiService
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -39,7 +43,8 @@ class MainActivity : ComponentActivity() {
                         navController = navController,
                         browserViewModel = browserViewModel,
                         agentViewModel = agentViewModel,
-                        settingsRepository = settingsRepository
+                        settingsRepository = settingsRepository,
+                        aiService = aiService
                     )
                 }
             }

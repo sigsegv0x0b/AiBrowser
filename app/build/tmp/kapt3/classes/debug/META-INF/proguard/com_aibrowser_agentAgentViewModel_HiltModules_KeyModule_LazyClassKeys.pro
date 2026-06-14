@@ -1,0 +1,4 @@
+-keep,allowobfuscation,allowshrinking class com.aibrowser.browser.BrowserViewModel
+-keep,allowobfuscation,allowshrinking class com.aibrowser.browser.BrowserViewModel
+-keep,allowobfuscation,allowshrinking class com.aibrowser.agent.AgentViewModel
+-keep,allowobfuscation,allowshrinking class com.aibrowser.agent.AgentViewModel

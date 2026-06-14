@@ -5,6 +5,7 @@ import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import com.aibrowser.agent.AgentViewModel
+import com.aibrowser.agent.AiService
 import com.aibrowser.browser.BrowserViewModel
 import com.aibrowser.data.SettingsRepository
 import com.aibrowser.ui.screens.AgentScreen
@@ -22,7 +23,8 @@ fun NavGraph(
     navController: NavHostController,
     browserViewModel: BrowserViewModel,
     agentViewModel: AgentViewModel,
-    settingsRepository: SettingsRepository
+    settingsRepository: SettingsRepository,
+    aiService: AiService
 ) {
     NavHost(navController = navController, startDestination = Routes.BROWSER) {
         composable(Routes.BROWSER) {
@@ -42,6 +44,7 @@ fun NavGraph(
         composable(Routes.SETTINGS) {
             SettingsScreen(
                 settingsRepository = settingsRepository,
+                aiService = aiService,
                 onBack = { navController.popBackStack() }
             )
         }

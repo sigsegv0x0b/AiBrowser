@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.aibrowser.data.models.ApiConfig
@@ -24,6 +25,8 @@ class SettingsRepository @Inject constructor(
         private val KEY_API_KEY = stringPreferencesKey("api_key")
         private val KEY_MODEL = stringPreferencesKey("model")
         private val KEY_BASE_URL = stringPreferencesKey("base_url")
+        private val KEY_CONTEXT_SIZE = intPreferencesKey("context_size")
+        private val KEY_MAX_OUTPUT = intPreferencesKey("max_output")
     }
 
     val apiConfig: Flow<ApiConfig> = context.dataStore.data.map { prefs ->
@@ -37,7 +40,9 @@ class SettingsRepository @Inject constructor(
             provider = provider,
             apiKey = prefs[KEY_API_KEY] ?: "",
             model = prefs[KEY_MODEL] ?: provider.defaultModel,
-            baseUrl = prefs[KEY_BASE_URL] ?: provider.defaultBaseUrl
+            baseUrl = prefs[KEY_BASE_URL] ?: provider.defaultBaseUrl,
+            contextSize = prefs[KEY_CONTEXT_SIZE] ?: 0,
+            maxOutputTokens = prefs[KEY_MAX_OUTPUT] ?: 0
         )
     }
 
@@ -47,6 +52,10 @@ class SettingsRepository @Inject constructor(
             prefs[KEY_API_KEY] = config.apiKey
             prefs[KEY_MODEL] = config.model
             prefs[KEY_BASE_URL] = config.baseUrl
+            if (config.contextSize > 0) prefs[KEY_CONTEXT_SIZE] = config.contextSize
+            else prefs.remove(KEY_CONTEXT_SIZE)
+            if (config.maxOutputTokens > 0) prefs[KEY_MAX_OUTPUT] = config.maxOutputTokens
+            else prefs.remove(KEY_MAX_OUTPUT)
         }
     }
 }

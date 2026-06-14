@@ -25,7 +25,7 @@ class TabManager @Inject constructor(
             settings.domStorageEnabled = true
             settings.allowFileAccess = true
             settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-            settings.userAgent = settings.userAgentString
+            settings.userAgentString = settings.userAgentString
                 .replace("; wv", "")
                 .replace("Android WebView", "Chrome")
             evaluateJavascript(StealthInjector.getInjectionScript(), null)
