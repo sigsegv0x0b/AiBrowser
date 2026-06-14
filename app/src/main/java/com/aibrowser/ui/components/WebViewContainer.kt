@@ -1,6 +1,7 @@
 package com.aibrowser.ui.components
 
 import android.annotation.SuppressLint
+import android.graphics.Bitmap
 import android.view.ViewGroup
 import android.webkit.WebChromeClient
 import android.webkit.WebView
@@ -32,18 +33,33 @@ fun WebViewContainer(
                 settings.domStorageEnabled = true
                 settings.allowFileAccess = true
                 settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+            }
+        },
+        modifier = modifier,
+        update = { wrapperView ->
+            tab.webView?.let { tabWebView ->
+                if (tabWebView.parent != wrapperView) {
+                    wrapperView.removeAllViews()
+                    wrapperView.addView(tabWebView)
+                }
 
-                webViewClient = object : WebViewClient() {
+                tabWebView.webViewClient = object : WebViewClient() {
+                    override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                        super.onPageStarted(view, url, favicon)
+                        onUrlChanged(url ?: "")
+                        onLoadingChanged(true)
+                    }
+
                     override fun onPageFinished(view: WebView?, url: String?) {
                         super.onPageFinished(view, url)
                         onUrlChanged(url ?: "")
                         onLoadingChanged(false)
                         view?.let { onNavigationStateChanged(it.canGoBack(), it.canGoForward()) }
-                        StealthInjector.inject(this@apply)
+                        StealthInjector.inject(tabWebView)
                     }
                 }
 
-                webChromeClient = object : WebChromeClient() {
+                tabWebView.webChromeClient = object : WebChromeClient() {
                     override fun onReceivedTitle(view: WebView?, title: String?) {
                         super.onReceivedTitle(view, title)
                         onTitleChanged(title ?: "Untitled")
@@ -54,15 +70,6 @@ fun WebViewContainer(
                         onLoadingChanged(newProgress < 100)
                     }
                 }
-            }
-        },
-        modifier = modifier,
-        update = { webView ->
-            tab.webView?.let { tabWebView ->
-                if (tabWebView.parent != null) {
-                    (tabWebView.parent as ViewGroup).removeView(tabWebView)
-                }
-                webView.addView(tabWebView)
             }
         }
     )
