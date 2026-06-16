@@ -6,16 +6,17 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.aibrowser.agent.AgentViewModel
+import com.aibrowser.data.models.ApiConfig
 import com.aibrowser.ui.components.MessageBubble
 import kotlinx.coroutines.delay
 
@@ -28,6 +29,8 @@ fun AgentScreen(
     val messages by agentViewModel.messages.collectAsState()
     val isLoading by agentViewModel.isLoading.collectAsState()
     val isPaused by agentViewModel.isPaused.collectAsState()
+    val currentAction by agentViewModel.currentAction.collectAsState()
+    val providerName by agentViewModel.providerName.collectAsState()
     var inputText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
 
@@ -40,7 +43,38 @@ fun AgentScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("AI Agent") },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("AI Agent")
+                        if (providerName.isNotBlank()) {
+                            Spacer(Modifier.width(8.dp))
+                            var expanded by remember { mutableStateOf(false) }
+                            Box {
+                                SuggestionChip(
+                                    onClick = { expanded = true },
+                                    label = {
+                                        Text(providerName, style = MaterialTheme.typography.labelSmall)
+                                    },
+                                    modifier = Modifier.height(24.dp)
+                                )
+                                DropdownMenu(
+                                    expanded = expanded,
+                                    onDismissRequest = { expanded = false }
+                                ) {
+                                    ApiConfig.ApiProvider.entries.forEach { p ->
+                                        DropdownMenuItem(
+                                            text = { Text(p.displayName) },
+                                            onClick = {
+                                                agentViewModel.setProvider(p)
+                                                expanded = false
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -79,7 +113,10 @@ fun AgentScreen(
             }
 
             if (isLoading) {
-                ThinkingIndicator(modifier = Modifier.padding(16.dp))
+                ThinkingIndicator(
+                    text = currentAction.ifBlank { "Thinking" },
+                    modifier = Modifier.padding(16.dp)
+                )
             }
 
             Row(
@@ -116,7 +153,7 @@ fun AgentScreen(
                         },
                         enabled = inputText.isNotBlank() && !isLoading
                     ) {
-                        Icon(Icons.Default.Send, contentDescription = "Send")
+                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
                     }
                 }
             }
@@ -125,7 +162,10 @@ fun AgentScreen(
 }
 
 @Composable
-private fun ThinkingIndicator(modifier: Modifier = Modifier) {
+private fun ThinkingIndicator(
+    text: String = "Thinking",
+    modifier: Modifier = Modifier
+) {
     var dots by remember { mutableStateOf("") }
     LaunchedEffect(Unit) {
         while (true) {
@@ -146,6 +186,6 @@ private fun ThinkingIndicator(modifier: Modifier = Modifier) {
     ) {
         CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
         Spacer(modifier = Modifier.width(12.dp))
-        Text("Thinking$dots", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("$text$dots", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

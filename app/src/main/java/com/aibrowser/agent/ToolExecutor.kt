@@ -47,7 +47,7 @@ class ToolExecutor @Inject constructor(
                     scrollIntoView = scrollIntoView
                 )
                 "browser_fill_form" -> fillForm(
-                    fields = arguments["fields"] as List<Map<String, String>>,
+                    fields = parseFillFormFields(arguments["fields"]),
                     scrollIntoView = scrollIntoView
                 )
                 "browser_select_option" -> selectOption(
@@ -117,12 +117,47 @@ class ToolExecutor @Inject constructor(
         }
     }
 
-    private fun resolveSelector(target: String): String {
-        return when {
-            target.matches(Regex("^(?:ref=)?(?:f\\d+)?e?\\d+$")) -> {
-                val ref = target.removePrefix("ref=").let {
-                    if (it.matches(Regex("\\d+"))) "e$it" else it
+    private fun parseFillFormFields(raw: Any?): List<Map<String, String>> {
+        @Suppress("UNCHECKED_CAST")
+        return when (raw) {
+            is List<*> -> raw.map { item ->
+                when (item) {
+                    is Map<*, *> -> {
+                        @Suppress("UNCHECKED_CAST")
+                        item as Map<String, String>
+                    }
+                    is String -> {
+                        val parts = item.split(",", limit = 2)
+                        var target = ""
+                        var value = ""
+                        for (part in parts) {
+                            val eq = part.indexOf('=')
+                            if (eq > 0) {
+                                val k = part.substring(0, eq).trim()
+                                val v = part.substring(eq + 1).trim()
+                                when (k) {
+                                    "target" -> target = v
+                                    "value" -> value = v
+                                }
+                            }
+                        }
+                        mapOf("target" to target, "value" to value)
+                    }
+                    else -> emptyMap()
                 }
+            }
+            else -> emptyList()
+        }
+    }
+
+    private fun resolveSelector(target: String): String {
+        val cleaned = target
+            .replace("[ref=", "")
+            .replace("]", "")
+            .removePrefix("ref=")
+        return when {
+            cleaned.matches(Regex("^(?:f\\d+)?e?\\d+$")) -> {
+                val ref = if (cleaned.matches(Regex("\\d+"))) "e$cleaned" else cleaned
                 "[data-ref='$ref']"
             }
             else -> target

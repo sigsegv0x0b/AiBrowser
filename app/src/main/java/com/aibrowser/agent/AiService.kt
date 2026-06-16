@@ -22,7 +22,8 @@ import javax.inject.Singleton
 @Singleton
 class AiService @Inject constructor(
     private val client: OkHttpClient,
-    private val settingsRepository: SettingsRepository
+    private val settingsRepository: SettingsRepository,
+    private val localLlmProvider: LocalLlmProvider
 ) {
     private val gson = Gson()
 
@@ -31,6 +32,7 @@ class AiService @Inject constructor(
         data class ToolCallStart(val id: String, val name: String, val args: String) : StreamEvent()
         data class Done(val fullResponse: String) : StreamEvent()
         data class Error(val message: String) : StreamEvent()
+        data class Status(val message: String) : StreamEvent()
     }
 
     suspend fun sendMessage(
@@ -38,6 +40,10 @@ class AiService @Inject constructor(
         onEvent: (StreamEvent) -> Unit
     ): String = withContext(Dispatchers.IO) {
         val config = settingsRepository.apiConfig.first()
+
+        if (config.provider == ApiConfig.ApiProvider.LOCAL) {
+            return@withContext localLlmProvider.sendMessage(messages, onEvent)
+        }
 
         if (config.apiKey.isBlank()) {
             onEvent(StreamEvent.Error("API key not configured. Go to Settings."))
@@ -143,6 +149,7 @@ class AiService @Inject constructor(
                 builder.addHeader("x-api-key", config.apiKey)
                 builder.addHeader("anthropic-version", "2023-06-01")
             }
+            ApiConfig.ApiProvider.LOCAL -> {}
         }
 
         return builder.build()
@@ -178,6 +185,7 @@ class AiService @Inject constructor(
                     requestBuilder.addHeader("x-api-key", config.apiKey)
                     requestBuilder.addHeader("anthropic-version", "2023-06-01")
                 }
+                ApiConfig.ApiProvider.LOCAL -> {}
             }
 
             client.newCall(requestBuilder.build()).execute().use { response ->

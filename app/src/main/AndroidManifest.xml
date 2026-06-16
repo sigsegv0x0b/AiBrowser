@@ -3,6 +3,9 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
@@ -13,7 +16,11 @@
         android:allowBackup="true"
         android:label="AI Browser"
         android:supportsRtl="true"
-        android:usesCleartextTraffic="true">
+        android:usesCleartextTraffic="true"
+        android:largeHeap="true"
+        android:hardwareAccelerated="true">
+        <uses-native-library android:name="libvndksupport.so" android:required="false" />
+        <uses-native-library android:name="libOpenCL.so" android:required="false" />
         <activity
             android:name=".MainActivity"
             android:exported="true"
