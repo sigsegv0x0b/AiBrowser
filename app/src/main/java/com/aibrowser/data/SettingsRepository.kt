@@ -10,6 +10,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.aibrowser.data.models.ApiConfig
 import com.aibrowser.data.models.BehaviorConfig
+import com.aibrowser.data.models.LocalLlmConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -33,6 +34,10 @@ class SettingsRepository @Inject constructor(
         private val KEY_BLOCK_EXTERNAL_INTENTS = booleanPreferencesKey("block_external_intents")
         private val KEY_TTS_PROMPT = stringPreferencesKey("tts_prompt")
         private val KEY_SYSTEM_PROMPT = stringPreferencesKey("system_prompt")
+        private val KEY_LOCAL_MODEL_PATH = stringPreferencesKey("local_model_path")
+        private val KEY_LOCAL_MODEL_ID = stringPreferencesKey("local_model_id")
+        private val KEY_LOCAL_BACKEND = stringPreferencesKey("local_backend")
+        private val KEY_LOCAL_MAX_TOKENS = intPreferencesKey("local_max_tokens")
     }
 
     val apiConfig: Flow<ApiConfig> = context.dataStore.data.map { prefs ->
@@ -65,6 +70,12 @@ class SettingsRepository @Inject constructor(
         }
     }
 
+    suspend fun setProvider(provider: ApiConfig.ApiProvider) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_PROVIDER] = provider.name
+        }
+    }
+
     val behaviorConfig: Flow<BehaviorConfig> = context.dataStore.data.map { prefs ->
         BehaviorConfig(
             scrollIntoView = prefs[KEY_SCROLL_INTO_VIEW] ?: true,
@@ -80,6 +91,31 @@ class SettingsRepository @Inject constructor(
             prefs[KEY_BLOCK_EXTERNAL_INTENTS] = config.blockExternalIntents
             prefs[KEY_TTS_PROMPT] = config.ttsPrompt
             prefs[KEY_SYSTEM_PROMPT] = config.systemPrompt
+        }
+    }
+
+    val localLlmConfig: Flow<LocalLlmConfig> = context.dataStore.data.map { prefs ->
+        val backendName = prefs[KEY_LOCAL_BACKEND] ?: LocalLlmConfig.Backend.AUTO.name
+        val backend = try {
+            LocalLlmConfig.Backend.valueOf(backendName)
+        } catch (_: Exception) {
+            LocalLlmConfig.Backend.AUTO
+        }
+        LocalLlmConfig(
+            downloadedModelPath = prefs[KEY_LOCAL_MODEL_PATH] ?: "",
+            downloadedModelId = prefs[KEY_LOCAL_MODEL_ID] ?: "",
+            backend = backend,
+            maxTokens = prefs[KEY_LOCAL_MAX_TOKENS] ?: 0
+        )
+    }
+
+    suspend fun saveLocalLlmConfig(config: LocalLlmConfig) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_LOCAL_MODEL_PATH] = config.downloadedModelPath
+            prefs[KEY_LOCAL_MODEL_ID] = config.downloadedModelId
+            prefs[KEY_LOCAL_BACKEND] = config.backend.name
+            if (config.maxTokens > 0) prefs[KEY_LOCAL_MAX_TOKENS] = config.maxTokens
+            else prefs.remove(KEY_LOCAL_MAX_TOKENS)
         }
     }
 }

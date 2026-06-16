@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.aibrowser.browser.TabManager
 import com.aibrowser.data.SettingsRepository
 import com.aibrowser.data.models.BehaviorConfig
+import com.aibrowser.data.models.ApiConfig
 import com.aibrowser.data.models.Message
 import com.aibrowser.data.models.ToolCall
 import com.aibrowser.service.AgentForegroundService
@@ -48,6 +49,9 @@ class AgentViewModel @Inject constructor(
 
     private val _actionHistory = MutableStateFlow<List<String>>(emptyList())
     val actionHistory: StateFlow<List<String>> = _actionHistory.asStateFlow()
+
+    private val _providerName = MutableStateFlow("")
+    val providerName: StateFlow<String> = _providerName.asStateFlow()
 
     private val gson = Gson()
 
@@ -123,6 +127,12 @@ class AgentViewModel @Inject constructor(
                 updateForegroundService(loading, action)
             }
         }
+
+        viewModelScope.launch {
+            settingsRepository.apiConfig.collect { cfg ->
+                _providerName.value = cfg.provider.displayName
+            }
+        }
     }
 
     fun sendMessage(content: String) {
@@ -148,6 +158,9 @@ class AgentViewModel @Inject constructor(
             val messages = tabManager.getTab(tabId)?.messages ?: return@launch
             aiService.sendMessage(messages) { event ->
                 when (event) {
+                    is AiService.StreamEvent.Status -> {
+                        _currentAction.value = event.message
+                    }
                     is AiService.StreamEvent.Token -> {
                         assistantContent.append(event.text)
                         tabUpsertAssistantMessage(tabId, assistantId, assistantContent.toString(), toolCalls)
@@ -309,6 +322,9 @@ class AgentViewModel @Inject constructor(
         val messages = tabManager.getTab(tabId)?.messages ?: return
         aiService.sendMessage(messages) { event ->
             when (event) {
+                is AiService.StreamEvent.Status -> {
+                    _currentAction.value = event.message
+                }
                 is AiService.StreamEvent.Token -> {
                     followUpContent.append(event.text)
                     tabUpsertAssistantMessage(tabId, followUpId, followUpContent.toString(), followUpToolCalls)
@@ -362,6 +378,12 @@ class AgentViewModel @Inject constructor(
         val tabId = currentTabId ?: return
         _isPaused.value = true
         tabSetPaused(tabId, true)
+    }
+
+    fun setProvider(provider: ApiConfig.ApiProvider) {
+        viewModelScope.launch {
+            settingsRepository.setProvider(provider)
+        }
     }
 
     fun resume(content: String) {
