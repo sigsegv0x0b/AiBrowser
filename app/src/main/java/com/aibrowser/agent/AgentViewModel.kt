@@ -83,6 +83,9 @@ class AgentViewModel @Inject constructor(
                 "browser_refresh" -> "Refreshing page"
                 "browser_go_back" -> "Going back"
                 "browser_go_forward" -> "Going forward"
+                "file_read" -> "Reading file"
+                "file_write" -> "Writing file"
+                "file_list" -> "Listing directory"
                 else -> "Executing $name"
             }
         }
@@ -180,7 +183,7 @@ class AgentViewModel @Inject constructor(
                     }
                     is AiService.StreamEvent.Done -> {
                         if (assistantContent.isNotEmpty() || toolCalls.isNotEmpty()) {
-                            tabUpsertAssistantMessage(tabId, assistantId, assistantContent.toString(), toolCalls)
+                            tabUpsertAssistantMessage(tabId, assistantId, assistantContent.toString(), toolCalls, event.thinking)
 
                             if (toolCalls.isNotEmpty()) {
                                 viewModelScope.launch { executeToolCalls(tabId, toolCalls) }
@@ -213,10 +216,10 @@ class AgentViewModel @Inject constructor(
         syncFlowsFromTab(tabId)
     }
 
-    private fun tabUpsertAssistantMessage(tabId: String, id: String, content: String, toolCalls: List<ToolCall>) {
+    private fun tabUpsertAssistantMessage(tabId: String, id: String, content: String, toolCalls: List<ToolCall>, thinking: String? = null) {
         tabManager.updateTab(tabId) { tab ->
             val existing = tab.messages.indexOfFirst { it.id == id }
-            val msg = Message(id = id, role = Message.Role.ASSISTANT, content = content, toolCalls = toolCalls)
+            val msg = Message(id = id, role = Message.Role.ASSISTANT, content = content, toolCalls = toolCalls, thinking = thinking)
             val newMessages = if (existing >= 0) {
                 tab.messages.toMutableList().apply { set(existing, msg) }
             } else {
@@ -346,7 +349,7 @@ class AgentViewModel @Inject constructor(
                         followUpToolCalls.isNotEmpty() -> ""
                         else -> "(no response)"
                     }
-                    tabUpsertAssistantMessage(tabId, followUpId, finalContent, followUpToolCalls)
+                    tabUpsertAssistantMessage(tabId, followUpId, finalContent, followUpToolCalls, event.thinking)
                     if (followUpToolCalls.isNotEmpty()) {
                         val paused = tabManager.getTab(tabId)?.isPaused ?: false
                         if (!paused) {
