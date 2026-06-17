@@ -1,13 +1,22 @@
 package com.aibrowser.agent
 
+import android.content.Context
+import android.net.Uri
+import androidx.documentfile.provider.DocumentFile
 import com.aibrowser.browser.TabManager
 import com.aibrowser.data.SettingsRepository
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.coroutines.resume
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -15,7 +24,8 @@ import javax.inject.Singleton
 @Singleton
 class ToolExecutor @Inject constructor(
     private val tabManager: TabManager,
-    private val settingsRepository: SettingsRepository
+    private val settingsRepository: SettingsRepository,
+    @ApplicationContext private val context: Context
 ) {
     suspend fun execute(toolName: String, arguments: Map<String, Any>): String {
         val config = settingsRepository.behaviorConfig.first()
@@ -90,6 +100,21 @@ class ToolExecutor @Inject constructor(
                 "browser_resize" -> resize(
                     width = (arguments["width"] as? Double)?.toInt() ?: 0,
                     height = (arguments["height"] as? Double)?.toInt() ?: 0
+                )
+                "file_read" -> fileRead(
+                    path = arguments["path"] as String,
+                    offset = (arguments["offset"] as? Double)?.toInt() ?: -1,
+                    length = (arguments["length"] as? Double)?.toInt() ?: -1
+                )
+                "file_write" -> fileWrite(
+                    path = arguments["path"] as String,
+                    content = arguments["content"] as String
+                )
+                "file_list" -> fileList(
+                    path = arguments["path"] as? String ?: "",
+                    sort = arguments["sort"] as? String,
+                    startLine = (arguments["startLine"] as? Double)?.toInt(),
+                    count = (arguments["count"] as? Double)?.toInt()
                 )
                 else -> "Unknown tool: $toolName"
             }
@@ -621,6 +646,148 @@ class ToolExecutor @Inject constructor(
                 } else "Invalid index: $index"
             }
             else -> "Unknown tab action: $action"
+        }
+    }
+
+    private suspend fun resolveRoot(): DocumentFile? {
+        val uriStr = settingsRepository.notesDirectoryUri.first()
+        if (uriStr.isNullOrBlank()) return null
+        val uri = Uri.parse(uriStr)
+        return DocumentFile.fromTreeUri(context, uri)
+    }
+
+    private fun findDocument(parent: DocumentFile, path: String): DocumentFile? {
+        val parts = path.trim('/').split("/").filter { it.isNotEmpty() }
+        if (parts.isEmpty()) return parent
+        var current = parent
+        for ((i, name) in parts.withIndex()) {
+            val child = current.findFile(name) ?: return null
+            if (i == parts.size - 1) return child
+            if (child.isDirectory) current = child
+            else return null
+        }
+        return current
+    }
+
+    private fun resolveOrCreateFile(root: DocumentFile, path: String): DocumentFile? {
+        val parts = path.trim('/').split("/").filter { it.isNotEmpty() }
+        if (parts.isEmpty()) return null
+        var current = root
+        for ((i, name) in parts.withIndex()) {
+            val isLast = i == parts.size - 1
+            var child = current.findFile(name)
+            if (child == null) {
+                child = if (isLast) current.createFile("application/octet-stream", name)
+                         else current.createDirectory(name)
+            }
+            if (child == null) return null
+            if (isLast) return child
+            if (!child.isDirectory) return null
+            current = child
+        }
+        return null
+    }
+
+    private suspend fun fileRead(path: String, offset: Int, length: Int): String = withContext(Dispatchers.IO) {
+        val root = resolveRoot() ?: return@withContext "Notes directory not configured. Go to Settings → Behavior to set one."
+        val file = findDocument(root, path)
+            ?: return@withContext "File not found: $path"
+        if (file.isDirectory) return@withContext "Cannot read a directory: $path"
+
+        val start = if (offset >= 0) offset else 0
+        val maxLen = if (length > 0) length else Int.MAX_VALUE
+
+        context.contentResolver.openInputStream(file.uri)?.use { input ->
+            if (start > 0) {
+                var skipped = 0L
+                while (skipped < start) {
+                    val s = input.skip(start - skipped)
+                    if (s <= 0) break
+                    skipped += s
+                }
+            }
+            val reader = BufferedReader(InputStreamReader(input))
+            val buf = CharArray(minOf(maxLen.coerceAtMost(1048576), 65536))
+            val sb = StringBuilder()
+            var totalRead = 0
+            while (totalRead < maxLen) {
+                val toRead = minOf(buf.size, maxLen - totalRead)
+                val n = reader.read(buf, 0, toRead)
+                if (n < 0) break
+                sb.append(buf, 0, n)
+                totalRead += n
+            }
+            if (sb.length >= maxLen) sb.append("\n... (truncated at $maxLen bytes)")
+            return@withContext sb.toString()
+        } ?: return@withContext "Failed to open file: $path"
+    }
+
+    private suspend fun fileWrite(path: String, content: String): String = withContext(Dispatchers.IO) {
+        val root = resolveRoot() ?: return@withContext "Notes directory not configured. Go to Settings → Behavior to set one."
+
+        val existing = findDocument(root, path)
+        if (existing != null && existing.isDirectory) {
+            return@withContext "Cannot overwrite a directory: $path"
+        }
+
+        if (existing != null) {
+            if (!existing.delete()) return@withContext "Failed to delete existing file: $path"
+        }
+
+        val file = resolveOrCreateFile(root, path)
+            ?: return@withContext "Failed to create file: $path"
+
+        val bytes = content.toByteArray(Charsets.UTF_8)
+        context.contentResolver.openOutputStream(file.uri, "wt")?.use { out ->
+            out.write(bytes)
+            out.flush()
+        } ?: return@withContext "Failed to open file for writing: $path"
+
+        "Written ${bytes.size} bytes to $path"
+    }
+
+    private suspend fun fileList(path: String, sort: String?, startLine: Int?, count: Int?): String = withContext(Dispatchers.IO) {
+        val root = resolveRoot() ?: return@withContext "Notes directory not configured. Go to Settings → Behavior to set one."
+
+        val dir = if (path.isBlank()) root else findDocument(root, path)
+            ?: return@withContext "Directory not found: $path"
+        if (!dir.isDirectory) return@withContext "Not a directory: $path"
+
+        val allFiles = dir.listFiles().toList()
+        val sorted = when (sort?.lowercase()) {
+            "size" -> allFiles.sortedBy { it.length() }
+            "date" -> allFiles.sortedByDescending { it.lastModified() }
+            "created_date" -> allFiles.sortedByDescending { it.lastModified() }
+            else -> allFiles.sortedBy { it.name?.lowercase() ?: "" }
+        }
+
+        val start = (startLine ?: 0).coerceIn(0, sorted.size)
+        val end = if (count != null) (start + count).coerceAtMost(sorted.size) else sorted.size
+        val page = sorted.subList(start, end)
+        val dateFmt = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
+
+        val sb = StringBuilder()
+        sb.appendLine("Directory: ${path.ifBlank { "/" }}")
+        for (f in page) {
+            val name = f.name ?: "unknown"
+            val displayName = if (f.isDirectory) "$name/" else name
+            val sizeStr = if (f.isDirectory) "(dir)" else formatSize(f.length())
+            val modified = dateFmt.format(Date(f.lastModified()))
+            val line = "  ${displayName.padEnd(36)} ${sizeStr.padEnd(10)} $modified"
+            sb.appendLine(line)
+        }
+        val total = sorted.size
+        if (total == 0) sb.appendLine("(empty)")
+        sb.appendLine("$total entries" + if (end < total) " (showing ${start+1}-$end of $total)" else "")
+        return@withContext sb.toString().trimEnd()
+    }
+
+    private fun formatSize(bytes: Long): String {
+        return when {
+            bytes < 1024 -> "$bytes B"
+            bytes < 1024 * 1024 -> "%.1f KB".format(bytes / 1024.0)
+            bytes < 1024 * 1024 * 1024 -> "%.1f MB".format(bytes / (1024.0 * 1024))
+            else -> "%.1f GB".format(bytes / (1024.0 * 1024 * 1024))
         }
     }
 }

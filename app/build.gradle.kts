@@ -26,13 +26,13 @@ android {
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
     }
 
     kotlin {
         compilerOptions {
-            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
         }
     }
 
@@ -42,6 +42,7 @@ android {
 }
 
 dependencies {
+    // Compose BOM 2024.12.01 is the last BOM compatible with compileSdk 34
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
     implementation(composeBom)
     implementation("androidx.compose.material3:material3")
@@ -54,8 +55,8 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     debugImplementation("androidx.compose.ui:ui-tooling")
 
-    implementation("com.google.dagger:hilt-android:2.54")
-    kapt("com.google.dagger:hilt-android-compiler:2.54")
+    implementation("com.google.dagger:hilt-android:2.58")
+    kapt("com.google.dagger:hilt-android-compiler:2.58")
     implementation("androidx.hilt:hilt-navigation-compose:1.2.0")
 
     implementation("com.squareup.retrofit2:retrofit:2.9.0")
@@ -67,4 +68,8 @@ dependencies {
     implementation("com.google.code.gson:gson:2.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("androidx.core:core-ktx:1.12.0")
+    implementation("androidx.documentfile:documentfile:1.0.1")
+
+    // LiteRT-LM for on-device LLM inference
+    implementation("com.google.ai.edge.litertlm:litertlm-android:latest.release")
 }

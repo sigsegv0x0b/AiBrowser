@@ -1,5 +1,9 @@
 package com.aibrowser.ui.screens
 
+import android.content.Intent
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
@@ -14,10 +18,12 @@ import androidx.compose.material3.MenuAnchorType
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.documentfile.provider.DocumentFile
 import com.aibrowser.agent.AiService
 import com.aibrowser.agent.LocalLlmProvider
 import com.aibrowser.agent.LocalModelManager
@@ -41,6 +47,7 @@ fun SettingsScreen(
     val config by settingsRepository.apiConfig.collectAsState(initial = ApiConfig())
     val behavior by settingsRepository.behaviorConfig.collectAsState(initial = BehaviorConfig())
     val localLlmConfig by settingsRepository.localLlmConfig.collectAsState(initial = LocalLlmConfig())
+    val notesDirectoryUri by settingsRepository.notesDirectoryUri.collectAsState(initial = null)
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
 
@@ -91,6 +98,9 @@ fun SettingsScreen(
                 )
                 2 -> BehaviorSettingsTab(
                     behavior = behavior,
+                    notesDirectoryUri = notesDirectoryUri,
+                    settingsRepository = settingsRepository,
+                    scope = scope,
                     onSave = { scope.launch { settingsRepository.saveBehaviorConfig(it) } }
                 )
             }
@@ -693,12 +703,39 @@ private fun LocalLlmTab(
 @Composable
 private fun BehaviorSettingsTab(
     behavior: BehaviorConfig,
+    notesDirectoryUri: String?,
+    settingsRepository: SettingsRepository,
+    scope: kotlinx.coroutines.CoroutineScope,
     onSave: (BehaviorConfig) -> Unit
 ) {
     var scrollIntoView by remember(behavior) { mutableStateOf(behavior.scrollIntoView) }
     var blockExternalIntents by remember(behavior) { mutableStateOf(behavior.blockExternalIntents) }
     var ttsPrompt by remember(behavior) { mutableStateOf(behavior.ttsPrompt) }
     var systemPrompt by remember(behavior) { mutableStateOf(behavior.systemPrompt) }
+
+    val context = LocalContext.current
+    val directoryPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+            scope.launch {
+                settingsRepository.saveNotesDirectoryUri(uri.toString())
+            }
+        }
+    }
+
+    val directoryName = remember(notesDirectoryUri) {
+        if (notesDirectoryUri.isNullOrBlank()) null
+        else {
+            try {
+                DocumentFile.fromTreeUri(context, Uri.parse(notesDirectoryUri))?.name
+            } catch (_: Exception) { null }
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -729,6 +766,28 @@ private fun BehaviorSettingsTab(
             }
             Spacer(Modifier.width(16.dp))
             Switch(checked = blockExternalIntents, onCheckedChange = { blockExternalIntents = it })
+        }
+
+        HorizontalDivider()
+        Text("Notes Directory", style = MaterialTheme.typography.titleMedium)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                if (directoryName != null) {
+                    Text("Directory: $directoryName", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
+                    Text("Not set — file_read/file_write/file_list tools will be unavailable",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error)
+                }
+            }
+            Spacer(Modifier.width(16.dp))
+            OutlinedButton(onClick = { directoryPickerLauncher.launch(null) }) {
+                Text(if (directoryName != null) "Change" else "Choose")
+            }
         }
 
         HorizontalDivider()

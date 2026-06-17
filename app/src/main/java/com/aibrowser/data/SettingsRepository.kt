@@ -38,6 +38,7 @@ class SettingsRepository @Inject constructor(
         private val KEY_LOCAL_MODEL_ID = stringPreferencesKey("local_model_id")
         private val KEY_LOCAL_BACKEND = stringPreferencesKey("local_backend")
         private val KEY_LOCAL_MAX_TOKENS = intPreferencesKey("local_max_tokens")
+        private val KEY_NOTES_DIRECTORY_URI = stringPreferencesKey("notes_directory_uri")
     }
 
     val apiConfig: Flow<ApiConfig> = context.dataStore.data.map { prefs ->
@@ -116,6 +117,16 @@ class SettingsRepository @Inject constructor(
             prefs[KEY_LOCAL_BACKEND] = config.backend.name
             if (config.maxTokens > 0) prefs[KEY_LOCAL_MAX_TOKENS] = config.maxTokens
             else prefs.remove(KEY_LOCAL_MAX_TOKENS)
+        }
+    }
+
+    val notesDirectoryUri: Flow<String?> = context.dataStore.data.map { prefs ->
+        prefs[KEY_NOTES_DIRECTORY_URI]
+    }
+
+    suspend fun saveNotesDirectoryUri(uri: String) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_NOTES_DIRECTORY_URI] = uri
         }
     }
 }

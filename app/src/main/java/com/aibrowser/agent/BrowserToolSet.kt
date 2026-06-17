@@ -114,5 +114,26 @@ class BrowserToolSet : ToolSet {
         @ToolParam(description = "New viewport height") height: Int
     ): Map<String, String> = empty()
 
+    @Tool(description = "Read a file from the notes directory")
+    fun file_read(
+        @ToolParam(description = "Relative path to the file within the notes directory") path: String,
+        @ToolParam(description = "Byte offset to start reading from (0-based, default 0)") offset: Int? = null,
+        @ToolParam(description = "Maximum number of bytes to read (default: entire file)") length: Int? = null
+    ): Map<String, String> = empty()
+
+    @Tool(description = "Write content to a file in the notes directory. Creates parent directories if needed.")
+    fun file_write(
+        @ToolParam(description = "Relative path to the file within the notes directory") path: String,
+        @ToolParam(description = "Content to write to the file") content: String
+    ): Map<String, String> = empty()
+
+    @Tool(description = "List files and directories within the notes directory")
+    fun file_list(
+        @ToolParam(description = "Relative path within the notes directory (default: root)") path: String? = null,
+        @ToolParam(description = "Sort mode: name, size, date, or created_date") sort: String? = null,
+        @ToolParam(description = "Starting index for pagination (0-based)") startLine: Int? = null,
+        @ToolParam(description = "Maximum number of entries to return") count: Int? = null
+    ): Map<String, String> = empty()
+
     private fun empty(): Map<String, String> = emptyMap()
 }

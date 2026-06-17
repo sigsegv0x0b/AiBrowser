@@ -225,6 +225,44 @@ object ToolDefinitions {
                 },
                 "required": ["width", "height"]
             }""", JsonObject::class.java)
+        ),
+        Tool(
+            name = "file_read",
+            description = "Read a file from the notes directory",
+            parameters = gson.fromJson("""{
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Relative path to the file within the notes directory"},
+                    "offset": {"type": "integer", "description": "Byte offset to start reading from (0-based, default 0)"},
+                    "length": {"type": "integer", "description": "Maximum number of bytes to read (default: entire file)"}
+                },
+                "required": ["path"]
+            }""", JsonObject::class.java)
+        ),
+        Tool(
+            name = "file_write",
+            description = "Write content to a file in the notes directory. Creates parent directories if needed.",
+            parameters = gson.fromJson("""{
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Relative path to the file within the notes directory"},
+                    "content": {"type": "string", "description": "Content to write to the file"}
+                },
+                "required": ["path", "content"]
+            }""", JsonObject::class.java)
+        ),
+        Tool(
+            name = "file_list",
+            description = "List files and directories within the notes directory",
+            parameters = gson.fromJson("""{
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Relative path within the notes directory (default: root)"},
+                    "sort": {"type": "string", "enum": ["name", "size", "date", "created_date"], "description": "Sort mode"},
+                    "startLine": {"type": "integer", "description": "Starting index for pagination (0-based)"},
+                    "count": {"type": "integer", "description": "Maximum number of entries to return"}
+                }
+            }""", JsonObject::class.java)
         )
     )
 
