@@ -6,6 +6,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -13,6 +14,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.material3.MenuAnchorType
 import androidx.compose.runtime.*
@@ -25,14 +27,25 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.documentfile.provider.DocumentFile
 import com.aibrowser.agent.AiService
+import com.aibrowser.agent.GgufModelCatalog
+import com.aibrowser.agent.LlamaCppProvider
 import com.aibrowser.agent.LocalLlmProvider
 import com.aibrowser.agent.LocalModelManager
+import com.aibrowser.agent.ModelDownloader
 import com.aibrowser.agent.TestResult
 import com.aibrowser.data.SettingsRepository
 import com.aibrowser.data.models.ApiConfig
+import com.aibrowser.data.models.AvailableGgufModel
 import com.aibrowser.data.models.BehaviorConfig
+import com.aibrowser.data.models.LlamaCppSettings
 import com.aibrowser.data.models.LocalLlmConfig
 import com.aibrowser.data.models.ModelInfo
+import com.geniex.sdk.ModelManagerWrapper
+import com.geniex.sdk.bean.HubSource
+import com.geniex.sdk.bean.ModelPullInput
+import com.google.gson.Gson
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -42,17 +55,20 @@ fun SettingsScreen(
     aiService: AiService,
     localModelManager: LocalModelManager,
     localLlmProvider: LocalLlmProvider,
+    llamaCppProvider: LlamaCppProvider,
+    modelDownloader: ModelDownloader,
     onBack: () -> Unit
 ) {
     val config by settingsRepository.apiConfig.collectAsState(initial = ApiConfig())
     val behavior by settingsRepository.behaviorConfig.collectAsState(initial = BehaviorConfig())
     val localLlmConfig by settingsRepository.localLlmConfig.collectAsState(initial = LocalLlmConfig())
     val notesDirectoryUri by settingsRepository.notesDirectoryUri.collectAsState(initial = null)
+    val llamaCppSettings by settingsRepository.llamaCppSettings.collectAsState(initial = LlamaCppSettings())
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
 
     var selectedTab by remember { mutableIntStateOf(0) }
-    val tabs = listOf("Cloud LLM", "Local LLM", "Behavior")
+    val tabs = listOf("Cloud LLM", "llama.cpp Local AI", "LiteRT local ai", "Behavior")
 
     Scaffold(
         topBar = {
@@ -89,14 +105,21 @@ fun SettingsScreen(
                     scope = scope,
                     focusManager = focusManager
                 )
-                1 -> LocalLlmTab(
+                1 -> LlamaCppTab(
+                    llamaCppSettings = llamaCppSettings,
+                    settingsRepository = settingsRepository,
+                    llamaCppProvider = llamaCppProvider,
+                    modelDownloader = modelDownloader,
+                    scope = scope
+                )
+                2 -> LiteRtTab(
                     localLlmConfig = localLlmConfig,
                     localModelManager = localModelManager,
                     settingsRepository = settingsRepository,
                     localLlmProvider = localLlmProvider,
                     scope = scope
                 )
-                2 -> BehaviorSettingsTab(
+                3 -> BehaviorSettingsTab(
                     behavior = behavior,
                     notesDirectoryUri = notesDirectoryUri,
                     settingsRepository = settingsRepository,
@@ -123,7 +146,7 @@ private fun CloudLlmTab(
     var baseUrl by remember(config) { mutableStateOf(config.baseUrl) }
     var contextSize by remember(config) { mutableStateOf(config.contextSize.toString()) }
     var maxOutputTokens by remember(config) { mutableStateOf(config.maxOutputTokens.toString()) }
-    var useCustomModel by remember(config) { mutableStateOf(config.model.isNotEmpty() && config.provider != ApiConfig.ApiProvider.CLAUDE && config.provider != ApiConfig.ApiProvider.LOCAL) }
+    var useCustomModel by remember(config) { mutableStateOf(config.model.isNotEmpty() && config.provider != ApiConfig.ApiProvider.CLAUDE && config.provider != ApiConfig.ApiProvider.LOCAL_LLAMACPP && config.provider != ApiConfig.ApiProvider.LOCAL_LITERT) }
 
     var fetchedModels by remember { mutableStateOf<List<ModelInfo>>(emptyList()) }
     var isFetching by remember { mutableStateOf(false) }
@@ -156,7 +179,7 @@ private fun CloudLlmTab(
                 expanded = providerExpanded,
                 onDismissRequest = { providerExpanded = false }
             ) {
-                ApiConfig.ApiProvider.entries.filter { it != ApiConfig.ApiProvider.LOCAL }.forEach { p ->
+                ApiConfig.ApiProvider.entries.filter { it != ApiConfig.ApiProvider.LOCAL_LLAMACPP && it != ApiConfig.ApiProvider.LOCAL_LITERT }.forEach { p ->
                     DropdownMenuItem(
                         text = { Text(p.displayName) },
                         onClick = {
@@ -354,7 +377,7 @@ private fun CloudLlmTab(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun LocalLlmTab(
+private fun LiteRtTab(
     localLlmConfig: LocalLlmConfig,
     localModelManager: LocalModelManager,
     settingsRepository: SettingsRepository,
@@ -370,8 +393,6 @@ private fun LocalLlmTab(
     var maxTokens by remember(localLlmConfig) {
         mutableStateOf(if (localLlmConfig.maxTokens > 0) localLlmConfig.maxTokens.toString() else "")
     }
-    var isTesting by remember { mutableStateOf(false) }
-    var testResult by remember { mutableStateOf<TestResult?>(null) }
 
     val availableModels = localModelManager.availableModels
 
@@ -457,7 +478,7 @@ private fun LocalLlmTab(
                                                 backend = localBackend
                                             )
                                         )
-                                            settingsRepository.setProvider(ApiConfig.ApiProvider.LOCAL)
+                                            settingsRepository.setProvider(ApiConfig.ApiProvider.LOCAL_LITERT)
                                     }
                                 },
                                 enabled = !isSelected
@@ -511,7 +532,7 @@ private fun LocalLlmTab(
                                                         )
                                                     )
                                                     settingsRepository.saveApiConfig(
-                                                        ApiConfig(provider = ApiConfig.ApiProvider.LOCAL)
+                                                        ApiConfig(provider = ApiConfig.ApiProvider.LOCAL_LITERT)
                                                     )
                                                 }
                                             },
@@ -638,32 +659,358 @@ private fun LocalLlmTab(
         )
 
         if (localLlmConfig.isModelReady) {
-            Spacer(Modifier.height(8.dp))
+            HorizontalDivider()
+            Text("Benchmark", style = MaterialTheme.typography.titleMedium)
+            var benchmarkResult by remember { mutableStateOf<String?>(null) }
+            var isBenchmarking by remember { mutableStateOf(false) }
+            var benchmarkStep by remember { mutableStateOf<String?>(null) }
+
             Button(
                 onClick = {
+                    isBenchmarking = true
+                    benchmarkResult = null
+                    benchmarkStep = null
                     scope.launch {
-                        isTesting = true
-                        testResult = null
-                        testResult = localLlmProvider.testInference()
-                        isTesting = false
+                        try {
+                            benchmarkStep = "Loading model..."
+                            val testResult = localLlmProvider.testInference()
+                            benchmarkStep = "Running inference..."
+                            val stats = localLlmProvider.lastStats.value
+                            benchmarkStep = null
+
+                            benchmarkResult = buildString {
+                                appendLine("Model: ${localLlmConfig.downloadedModelId}")
+                                appendLine("Backend: ${stats?.device ?: testResult.backend}")
+                                appendLine("Output: \"${testResult.response.take(120).trimEnd()}...\"")
+                                if (stats != null && stats.decodingSpeed > 0) {
+                                    appendLine("——————————")
+                                    appendLine("TTFT: ${"%.0f".format(stats.ttftMs)} ms")
+                                    appendLine("Decoding: ${"%.1f".format(stats.decodingSpeed)} tok/s")
+                                    appendLine("Tokens: ${stats.generatedTokens} gen / ${stats.promptTokens} prompt")
+                                } else {
+                                    appendLine("(no profile data)")
+                                }
+                            }
+                        } catch (e: Exception) {
+                            benchmarkResult = "Error: ${e.message}"
+                            benchmarkStep = "Failed"
+                        } finally {
+                            isBenchmarking = false
+                        }
                     }
                 },
-                enabled = !isTesting,
+                enabled = !isBenchmarking,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                if (isTesting) {
+                if (isBenchmarking) {
                     CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                     Spacer(Modifier.width(8.dp))
-                    Text("Testing...")
-                } else {
-                    Text("Test Inference")
+                }
+                Text(if (isBenchmarking) "Running..." else "Run Benchmark")
+            }
+
+            benchmarkStep?.let { step ->
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = step,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (step == "Failed") MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.primary
+                )
+            }
+
+            benchmarkResult?.let { result ->
+                Spacer(Modifier.height(8.dp))
+                val isError = result.startsWith("Error")
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (isError) MaterialTheme.colorScheme.errorContainer
+                        else MaterialTheme.colorScheme.surfaceVariant
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    SelectionContainer {
+                        Text(result, modifier = Modifier.padding(12.dp),
+                            style = MaterialTheme.typography.bodySmall)
+                    }
                 }
             }
         }
 
-        if (testResult != null) {
-            val result = testResult!!
-            val isError = result.response.startsWith("Error") || result.response.startsWith("No model")
+        Spacer(Modifier.height(32.dp))
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun LlamaCppTab(
+    llamaCppSettings: LlamaCppSettings,
+    settingsRepository: SettingsRepository,
+    llamaCppProvider: LlamaCppProvider,
+    modelDownloader: ModelDownloader,
+    scope: kotlinx.coroutines.CoroutineScope
+) {
+    var filterQuery by remember { mutableStateOf("") }
+    var isDownloading by remember { mutableStateOf(false) }
+    var downloadProgress by remember { mutableFloatStateOf(0f) }
+    var downloadSpeed by remember { mutableFloatStateOf(0f) }
+    var downloadStatus by remember { mutableStateOf<String?>(null) }
+    var selectedModel by remember(llamaCppSettings) { mutableStateOf(llamaCppSettings.selectedModel) }
+    var backend by remember(llamaCppSettings) { mutableStateOf(llamaCppSettings.backend) }
+    var nGpuLayers by remember(llamaCppSettings) { mutableStateOf(llamaCppSettings.nGpuLayers.toString()) }
+    var contextWindow by remember(llamaCppSettings) { mutableStateOf(llamaCppSettings.contextWindow.toString()) }
+    var maxTokens by remember(llamaCppSettings) { mutableStateOf(llamaCppSettings.maxTokens.toString()) }
+    var temperature by remember(llamaCppSettings) { mutableStateOf(llamaCppSettings.temperature.toString()) }
+    var topK by remember(llamaCppSettings) { mutableStateOf(llamaCppSettings.topK.toString()) }
+    var topP by remember(llamaCppSettings) { mutableStateOf(llamaCppSettings.topP.toString()) }
+    var useCustomSampler by remember(llamaCppSettings) { mutableStateOf(llamaCppSettings.useCustomSampler) }
+    var downloadingModelId by remember { mutableStateOf<String?>(null) }
+    var hfToken by remember { mutableStateOf("") }
+
+    LaunchedEffect(Unit) {
+        hfToken = settingsRepository.hfToken.first() ?: ""
+    }
+
+    val catalogModels = remember { GgufModelCatalog.models }
+    val hasToken = hfToken.isNotBlank()
+    val filteredModels = remember(filterQuery, catalogModels, hasToken) {
+        val base = if (hasToken) catalogModels else catalogModels.filter { !it.isGated }
+        if (filterQuery.isBlank()) base
+        else base.filter { m ->
+            m.displayName.contains(filterQuery, ignoreCase = true) ||
+            m.description.contains(filterQuery, ignoreCase = true) ||
+            m.quant.contains(filterQuery, ignoreCase = true) ||
+            m.repo.contains(filterQuery, ignoreCase = true)
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Text("Download a GGUF model from HuggingFace.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+        Card(
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Text("llama.cpp via GenieX", style = MaterialTheme.typography.titleSmall)
+                Spacer(Modifier.height(4.dp))
+                Text("Uses Qualcomm GenieX SDK with llama.cpp backend. GGUF models run on-device with NPU/GPU acceleration. Requires 4-8 GB RAM depending on model size.",
+                    style = MaterialTheme.typography.bodySmall)
+            }
+        }
+
+        HorizontalDivider()
+        Text("HF Token", style = MaterialTheme.typography.titleMedium)
+        Text("Set a HuggingFace access token to download gated models. Create one at huggingface.co/settings/tokens.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        OutlinedTextField(
+            value = hfToken,
+            onValueChange = { hfToken = it },
+            label = { Text("HuggingFace Token") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
+            placeholder = { Text("hf_...") }
+        )
+        Button(
+            onClick = {
+                scope.launch { settingsRepository.saveHfToken(hfToken) }
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Save Token")
+        }
+
+        HorizontalDivider()
+        Text("Available Models", style = MaterialTheme.typography.titleMedium)
+
+        OutlinedTextField(
+            value = filterQuery,
+            onValueChange = { filterQuery = it },
+            label = { Text("Filter models") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            leadingIcon = {
+                Icon(
+                    androidx.compose.material.icons.Icons.Default.Search,
+                    contentDescription = "Search",
+                    modifier = Modifier.size(20.dp)
+                )
+            },
+            placeholder = { Text("Search by name, quant, or description...") }
+        )
+
+        filteredModels.forEach { model ->
+            var isDownloaded by remember { mutableStateOf(false) }
+            LaunchedEffect(model.repo) {
+                isDownloaded = ModelManagerWrapper.getPaths(model.repo) != null
+            }
+            val isSelected = selectedModel == model.repo
+            val isCurrentDownload = isDownloading && downloadingModelId == model.id
+
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = when {
+                        isSelected -> MaterialTheme.colorScheme.primaryContainer
+                        isDownloaded -> MaterialTheme.colorScheme.secondaryContainer
+                        else -> MaterialTheme.colorScheme.surface
+                    }
+                ),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(model.displayName, style = MaterialTheme.typography.titleSmall)
+                            Spacer(Modifier.height(2.dp))
+                            Text(model.description, style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.height(2.dp))
+                            Text("%.1f GB  ·  %s  ·  %d+ GB RAM  ·  %s context".format(
+                                model.sizeGb, model.quant, model.minRamGb,
+                                if (model.contextSize >= 1000) "${model.contextSize / 1000}k" else "${model.contextSize}"
+                            ),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        if (isDownloaded) {
+                            Icon(Icons.Default.CheckCircle, contentDescription = "Downloaded",
+                                tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                        }
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (isDownloaded) {
+                            Button(
+                                onClick = {
+                                    selectedModel = model.repo
+                                    scope.launch {
+                                        settingsRepository.saveLlamaCppSettings(
+                                            llamaCppSettings.copy(selectedModel = model.repo)
+                                        )
+                                        settingsRepository.setProvider(ApiConfig.ApiProvider.LOCAL_LLAMACPP)
+                                    }
+                                },
+                                enabled = !isSelected
+                            ) {
+                                Text(if (isSelected) "Active" else "Use Model")
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    scope.launch {
+                                        ModelManagerWrapper.remove(model.repo)
+                                        if (isSelected) {
+                                            selectedModel = ""
+                                            settingsRepository.saveLlamaCppSettings(
+                                                llamaCppSettings.copy(selectedModel = "")
+                                            )
+                                        }
+                                        isDownloaded = false
+                                    }
+                                },
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                            ) {
+                                Icon(Icons.Default.Delete, contentDescription = "Delete", modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Delete")
+                            }
+                        } else {
+                            Button(
+                                onClick = {
+                                    scope.launch {
+                                        downloadingModelId = model.id
+                                        isDownloading = true
+                                        downloadStatus = null
+                                        downloadProgress = 0f
+                                        try {
+                                            val input = ModelPullInput(
+                                                model_name = model.repo,
+                                                quant = model.quant,
+                                                hub = HubSource.HUGGINGFACE
+                                            )
+                                            ModelManagerWrapper.pullFlow(input).collect { event ->
+                                                when (event) {
+                                                    is ModelManagerWrapper.PullEvent.Progress -> {
+                                                        val total = event.files.sumOf { if (it.total_bytes > 0) it.total_bytes else 0L }
+                                                        val done = event.files.sumOf { it.downloaded_bytes }
+                                                        downloadProgress = if (total > 0) done.toFloat() / total else 0f
+                                                        downloadSpeed = 0f
+                                                    }
+                                                    is ModelManagerWrapper.PullEvent.Completed -> {
+                                                        selectedModel = model.repo
+                                                        downloadStatus = "Downloaded: ${model.displayName}"
+                                                        isDownloaded = true
+                                                        settingsRepository.saveLlamaCppSettings(
+                                                            llamaCppSettings.copy(selectedModel = model.repo)
+                                                        )
+                                                        settingsRepository.setProvider(ApiConfig.ApiProvider.LOCAL_LLAMACPP)
+                                                    }
+                                                    is ModelManagerWrapper.PullEvent.Error -> {
+                                                        downloadStatus = "Error: ${event.message}"
+                                                    }
+                                                }
+                                            }
+                                        } catch (e: Exception) {
+                                            downloadStatus = "Error: ${e.message}"
+                                        } finally {
+                                            isDownloading = false
+                                            downloadingModelId = null
+                                        }
+                                    }
+                                },
+                                enabled = !isDownloading
+                            ) {
+                                if (isCurrentDownload) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        strokeWidth = 2.dp,
+                                        color = MaterialTheme.colorScheme.onPrimary
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("${(downloadProgress * 100).toInt()}%")
+                                } else {
+                                    Text("Download (%.1f GB)".format(model.sizeGb))
+                                }
+                            }
+                        }
+                    }
+
+                    if (isCurrentDownload) {
+                        Spacer(Modifier.height(8.dp))
+                        LinearProgressIndicator(
+                            progress = { downloadProgress },
+                            modifier = Modifier.fillMaxWidth().height(8.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+        if (filteredModels.isEmpty() && filterQuery.isNotBlank()) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("No models matching \"$filterQuery\"",
+                    modifier = Modifier.padding(12.dp),
+                    style = MaterialTheme.typography.bodySmall)
+            }
+        }
+
+        if (downloadStatus != null) {
+            val status = downloadStatus!!
+            val isError = status.startsWith("Error")
             Card(
                 colors = CardDefaults.cardColors(
                     containerColor = if (isError) MaterialTheme.colorScheme.errorContainer
@@ -671,26 +1018,242 @@ private fun LocalLlmTab(
                 ),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Column(modifier = Modifier.padding(12.dp)) {
-                    Text("Response:", style = MaterialTheme.typography.labelSmall)
-                    Text(result.response, style = MaterialTheme.typography.bodySmall)
-                    Spacer(Modifier.height(4.dp))
-                    Text("Backend: ${result.backend}", style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
+                Text(status, modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall)
             }
         }
 
-        if (localLlmConfig.isModelReady) {
+        HorizontalDivider()
+        Text("Model Path", style = MaterialTheme.typography.titleMedium)
+        OutlinedTextField(
+            value = selectedModel,
+            onValueChange = { selectedModel = it },
+            label = { Text("GGUF file path") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            placeholder = { Text("/data/.../model.gguf") }
+        )
+
+        HorizontalDivider()
+        Text("Backend", style = MaterialTheme.typography.titleMedium)
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            listOf(
+                "cpu" to "CPU",
+                "gpu" to "GPU",
+                "npu" to "NPU"
+            ).forEach { (value, label) ->
+                FilterChip(
+                    selected = backend == value,
+                    onClick = { backend = value },
+                    label = { Text(label) },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+
+        if (backend == "gpu") {
+            OutlinedTextField(
+                value = nGpuLayers,
+                onValueChange = { nGpuLayers = it },
+                label = { Text("GPU Layers") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+                supportingText = { Text("1–999 layers offloaded to GPU") }
+            )
+        }
+
+        HorizontalDivider()
+        Text("Inference Parameters", style = MaterialTheme.typography.titleMedium)
+
+        OutlinedTextField(
+            value = contextWindow,
+            onValueChange = { contextWindow = it },
+            label = { Text("Context Window (tokens)") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+            supportingText = { Text("Larger = more memory, smaller = faster") }
+        )
+
+        OutlinedTextField(
+            value = maxTokens,
+            onValueChange = { maxTokens = it },
+            label = { Text("Max Output Tokens") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+            supportingText = { Text("Max tokens per response") }
+        )
+
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Use Custom Sampler", style = MaterialTheme.typography.bodyLarge)
+                Text("When off, bridge defaults are used (temperature, topK, topP are ignored).",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Spacer(Modifier.width(16.dp))
+            Switch(checked = useCustomSampler, onCheckedChange = { useCustomSampler = it })
+        }
+
+        if (useCustomSampler) {
+            OutlinedTextField(
+                value = temperature,
+                onValueChange = { temperature = it },
+                label = { Text("Temperature") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Next),
+                supportingText = { Text("0-2, lower = more deterministic") }
+            )
+
+            OutlinedTextField(
+                value = topK,
+                onValueChange = { topK = it },
+                label = { Text("Top-K") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+                supportingText = { Text("Limits token selection to top K") }
+            )
+
+            OutlinedTextField(
+                value = topP,
+                onValueChange = { topP = it },
+                label = { Text("Top-P") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
+                supportingText = { Text("Nucleus sampling threshold (0-1)") }
+            )
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        Button(
+            onClick = {
+                scope.launch {
+                    settingsRepository.saveLlamaCppSettings(
+                        LlamaCppSettings(
+                            selectedModel = selectedModel,
+                            backend = backend,
+                            nGpuLayers = nGpuLayers.toIntOrNull() ?: 33,
+                            contextWindow = contextWindow.toIntOrNull() ?: 8192,
+                            maxTokens = maxTokens.toIntOrNull() ?: 4096,
+                            temperature = temperature.toFloatOrNull() ?: 0.7f,
+                            topK = topK.toIntOrNull() ?: 40,
+                            topP = topP.toFloatOrNull() ?: 0.95f,
+                            useCustomSampler = useCustomSampler
+                        )
+                    )
+                    if (selectedModel.isNotBlank()) {
+                        settingsRepository.setProvider(ApiConfig.ApiProvider.LOCAL_LLAMACPP)
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Save")
+        }
+
+        if (selectedModel.isNotBlank()) {
             HorizontalDivider()
-            Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+            Text("Benchmark", style = MaterialTheme.typography.titleMedium)
+            var benchmarkResult by remember { mutableStateOf<String?>(null) }
+            var isBenchmarking by remember { mutableStateOf(false) }
+            var benchmarkStep by remember { mutableStateOf<String?>(null) }
+
+            Button(
+                onClick = {
+                    isBenchmarking = true
+                    benchmarkResult = null
+                    benchmarkStep = null
+                    scope.launch {
+                        settingsRepository.saveLlamaCppSettings(
+                            LlamaCppSettings(
+                                selectedModel = selectedModel,
+                                backend = backend,
+                                nGpuLayers = nGpuLayers.toIntOrNull() ?: 33,
+                                contextWindow = contextWindow.toIntOrNull() ?: 8192,
+                                maxTokens = maxTokens.toIntOrNull() ?: 4096,
+                                temperature = temperature.toFloatOrNull() ?: 0.7f,
+                                topK = topK.toIntOrNull() ?: 40,
+                                topP = topP.toFloatOrNull() ?: 0.95f,
+                                useCustomSampler = useCustomSampler
+                            )
+                        )
+                        try {
+                            benchmarkStep = "Loading model..."
+                            var outputText = ""
+                            val output = llamaCppProvider.benchmarkInference(
+                                onToken = { outputText += it },
+                                onProgress = { benchmarkStep = it }
+                            )
+                            outputText = output
+                            benchmarkStep = "Running inference..."
+                            val stats = llamaCppProvider.lastStats.value
+                            benchmarkStep = null
+
+                            benchmarkResult = buildString {
+                                appendLine("Model: $selectedModel")
+                                appendLine("Backend: ${stats?.device ?: backend}")
+                                appendLine("Output: \"${outputText.take(120).trimEnd()}...\"")
+                                if (stats != null && stats.decodingSpeed > 0) {
+                                    appendLine("————————————————————")
+                                    appendLine("TTFT: ${"%.2f".format(stats.ttftMs)} ms")
+                                    appendLine("Prompt Tokens: ${stats.promptTokens}")
+                                    appendLine("Prefill Speed: ${"%.2f".format(stats.prefillSpeed)} tok/s")
+                                    appendLine("Generated Tokens: ${stats.generatedTokens}")
+                                    appendLine("Decoding Speed: ${"%.2f".format(stats.decodingSpeed)} tok/s")
+                                } else {
+                                    appendLine("(no profile data)")
+                                }
+                            }
+                        } catch (e: Exception) {
+                            benchmarkResult = "Error: ${e.message}"
+                            benchmarkStep = "Failed"
+                        } finally {
+                            isBenchmarking = false
+                        }
+                    }
+                },
+                enabled = !isBenchmarking,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Column(modifier = Modifier.padding(12.dp)) {
-                    Text("Ready", style = MaterialTheme.typography.titleSmall)
-                    Text("Model: ${localLlmConfig.downloadedModelId}", style = MaterialTheme.typography.bodySmall)
-                    Text("Backend: ${localLlmConfig.backend.displayName}", style = MaterialTheme.typography.bodySmall)
+                if (isBenchmarking) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text(if (isBenchmarking) "Running..." else "Run Benchmark")
+            }
+
+            benchmarkStep?.let { step ->
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = step,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (step == "Failed") MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.primary
+                )
+            }
+
+            benchmarkResult?.let { result ->
+                Spacer(Modifier.height(8.dp))
+                val isError = result.startsWith("Error")
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (isError) MaterialTheme.colorScheme.errorContainer
+                        else MaterialTheme.colorScheme.surfaceVariant
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    SelectionContainer {
+                        Text(result, modifier = Modifier.padding(12.dp),
+                            style = MaterialTheme.typography.bodySmall)
+                    }
                 }
             }
         }

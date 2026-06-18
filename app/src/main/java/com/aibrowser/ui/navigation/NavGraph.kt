@@ -6,8 +6,10 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import com.aibrowser.agent.AgentViewModel
 import com.aibrowser.agent.AiService
+import com.aibrowser.agent.LlamaCppProvider
 import com.aibrowser.agent.LocalLlmProvider
 import com.aibrowser.agent.LocalModelManager
+import com.aibrowser.agent.ModelDownloader
 import com.aibrowser.browser.BrowserViewModel
 import com.aibrowser.data.SettingsRepository
 import com.aibrowser.ui.screens.AgentScreen
@@ -28,7 +30,9 @@ fun NavGraph(
     settingsRepository: SettingsRepository,
     aiService: AiService,
     localModelManager: LocalModelManager,
-    localLlmProvider: LocalLlmProvider
+    localLlmProvider: LocalLlmProvider,
+    llamaCppProvider: LlamaCppProvider,
+    modelDownloader: ModelDownloader
 ) {
     NavHost(navController = navController, startDestination = Routes.BROWSER) {
         composable(Routes.BROWSER) {
@@ -52,6 +56,8 @@ fun NavGraph(
                 aiService = aiService,
                 localModelManager = localModelManager,
                 localLlmProvider = localLlmProvider,
+                llamaCppProvider = llamaCppProvider,
+                modelDownloader = modelDownloader,
                 onBack = { navController.popBackStack() }
             )
         }

@@ -56,6 +56,45 @@ fun MessageBubble(
             .padding(horizontal = 16.dp, vertical = 4.dp),
         horizontalAlignment = alignment
     ) {
+        if (isAssistant && message.thinking != null && message.thinking.isNotBlank()) {
+            var thinkingExpanded by remember { mutableStateOf(false) }
+            Card(
+                modifier = Modifier
+                    .widthIn(max = 300.dp)
+                    .clip(RoundedCornerShape(12.dp)),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                ),
+                onClick = { thinkingExpanded = !thinkingExpanded }
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = if (thinkingExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                        contentDescription = if (thinkingExpanded) "Collapse" else "Expand",
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        "Thinking",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                if (thinkingExpanded) {
+                    Text(
+                        text = message.thinking,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                    )
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+        }
         if (message.content.isNotBlank()) {
             if (isTool) {
                 CollapsibleToolContent(message.content, bubbleColor)
