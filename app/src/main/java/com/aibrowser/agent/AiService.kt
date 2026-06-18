@@ -23,14 +23,15 @@ import javax.inject.Singleton
 class AiService @Inject constructor(
     private val client: OkHttpClient,
     private val settingsRepository: SettingsRepository,
-    private val localLlmProvider: LocalLlmProvider
+    private val localLlmProvider: LocalLlmProvider,
+    private val llamaCppProvider: LlamaCppProvider
 ) {
     private val gson = Gson()
 
     sealed class StreamEvent {
         data class Token(val text: String) : StreamEvent()
         data class ToolCallStart(val id: String, val name: String, val args: String) : StreamEvent()
-        data class Done(val fullResponse: String) : StreamEvent()
+        data class Done(val fullResponse: String, val thinking: String? = null) : StreamEvent()
         data class Error(val message: String) : StreamEvent()
         data class Status(val message: String) : StreamEvent()
     }
@@ -41,8 +42,12 @@ class AiService @Inject constructor(
     ): String = withContext(Dispatchers.IO) {
         val config = settingsRepository.apiConfig.first()
 
-        if (config.provider == ApiConfig.ApiProvider.LOCAL) {
+        if (config.provider == ApiConfig.ApiProvider.LOCAL_LITERT) {
             return@withContext localLlmProvider.sendMessage(messages, onEvent)
+        }
+
+        if (config.provider == ApiConfig.ApiProvider.LOCAL_LLAMACPP) {
+            return@withContext llamaCppProvider.sendMessage(messages, onEvent)
         }
 
         if (config.apiKey.isBlank()) {
@@ -149,7 +154,8 @@ class AiService @Inject constructor(
                 builder.addHeader("x-api-key", config.apiKey)
                 builder.addHeader("anthropic-version", "2023-06-01")
             }
-            ApiConfig.ApiProvider.LOCAL -> {}
+            ApiConfig.ApiProvider.LOCAL_LLAMACPP -> {}
+                ApiConfig.ApiProvider.LOCAL_LITERT -> {}
         }
 
         return builder.build()
@@ -185,7 +191,8 @@ class AiService @Inject constructor(
                     requestBuilder.addHeader("x-api-key", config.apiKey)
                     requestBuilder.addHeader("anthropic-version", "2023-06-01")
                 }
-                ApiConfig.ApiProvider.LOCAL -> {}
+            ApiConfig.ApiProvider.LOCAL_LLAMACPP -> {}
+            ApiConfig.ApiProvider.LOCAL_LITERT -> {}
             }
 
             client.newCall(requestBuilder.build()).execute().use { response ->

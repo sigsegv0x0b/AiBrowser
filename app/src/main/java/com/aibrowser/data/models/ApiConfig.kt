@@ -12,7 +12,8 @@ data class ApiConfig(
         OPENAI("OpenAI", "gpt-4o", "https://api.openai.com/v1"),
         CLAUDE("Anthropic", "claude-sonnet-4-20250514", "https://api.anthropic.com"),
         CUSTOM("Custom", "", ""),
-        LOCAL("Local LLM", "", "")
+        LOCAL_LLAMACPP("llama.cpp Local", "", ""),
+        LOCAL_LITERT("LiteRT Local", "", "")
     }
 }
 

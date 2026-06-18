@@ -14,6 +14,9 @@ import com.google.ai.edge.litertlm.EngineConfig
 import com.google.gson.Gson
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import java.util.UUID
@@ -29,6 +32,9 @@ class LocalLlmProvider @Inject constructor(
     private var engine: Engine? = null
     private var activeBackend: LocalLlmConfig.Backend? = null
     private val gson = Gson()
+
+    private val _lastStats = MutableStateFlow<InferenceStats?>(null)
+    val lastStats: StateFlow<InferenceStats?> = _lastStats.asStateFlow()
 
     suspend fun sendMessage(
         messages: List<Message>,
@@ -82,12 +88,21 @@ class LocalLlmProvider @Inject constructor(
             var fullResponse = ""
             val liteToolCalls = mutableListOf<com.google.ai.edge.litertlm.ToolCall>()
             var parseError = false
+            val startTime = System.currentTimeMillis()
+            var ttftMs = 0.0
+            var tokenCount = 0L
+            var firstToken = true
             try {
                 conv.sendMessageAsync(userInput).collect { msg ->
                     val text = msg.contents.contents
                         .filterIsInstance<Content.Text>()
                         .joinToString("") { it.text }
                     if (text.isNotEmpty()) {
+                        if (firstToken) {
+                            ttftMs = (System.currentTimeMillis() - startTime).toDouble()
+                            firstToken = false
+                        }
+                        tokenCount += text.length / 2L
                         fullResponse += text
                         onEvent(StreamEvent.Token(text))
                     }
@@ -108,6 +123,18 @@ class LocalLlmProvider @Inject constructor(
                 conv.close()
             }
 
+            val totalTimeMs = System.currentTimeMillis() - startTime
+            val decodingTimeMs = totalTimeMs - ttftMs
+            val decodingSpeed = if (decodingTimeMs > 0 && tokenCount > 0)
+                tokenCount / (decodingTimeMs / 1000.0) else 0.0
+            _lastStats.value = InferenceStats(
+                ttftMs = ttftMs,
+                promptTokens = (userInput.length / 2).toLong(),
+                generatedTokens = tokenCount,
+                decodingSpeed = decodingSpeed,
+                device = activeBackend?.displayName ?: "Unknown"
+            )
+
             if (parseError || (liteToolCalls.isEmpty() && fullResponse.contains("<|tool_call>"))) {
                 val parsedToolCalls = parseToolCallsFromText(fullResponse)
                 for (tc in parsedToolCalls) {
@@ -126,7 +153,15 @@ class LocalLlmProvider @Inject constructor(
                 }
             }
 
-            onEvent(StreamEvent.Done(fullResponse))
+            val thinking = extractThinking(fullResponse)
+            if (thinking != null) {
+                val stripped = stripThinking(fullResponse)
+                if (stripped.isNotBlank()) {
+                    fullResponse = stripped
+                }
+            }
+
+            onEvent(StreamEvent.Done(fullResponse, thinking))
             fullResponse
         } catch (e: Exception) {
             val msg = e.message?.removePrefix("Status Code: 3. Message: ") ?: "Unknown error"
@@ -171,6 +206,22 @@ class LocalLlmProvider @Inject constructor(
                 else -> ""
             }
         }.length / 2
+    }
+
+    private fun extractThinking(text: String): String? {
+        val parts = mutableListOf<String>()
+        for (match in CHANNEL_REGEX.findAll(text)) {
+            parts.add(match.groupValues[1].trim())
+        }
+        return parts.joinToString("\n\n").ifEmpty { null }
+    }
+
+    private fun stripThinking(text: String): String {
+        return text.replace(CHANNEL_REGEX, "").trim()
+    }
+
+    companion object {
+        private val CHANNEL_REGEX = Regex("<channel\\|>(.*?)<\\|channel>", RegexOption.DOT_MATCHES_ALL)
     }
 
     private data class ToolCallData(val name: String, val arguments: Map<String, Any>)
@@ -366,12 +417,31 @@ class LocalLlmProvider @Inject constructor(
             val conv = engineInstance.createConversation(ConversationConfig())
             try {
                 var response = ""
+                val startTime = System.currentTimeMillis()
+                var ttftMs = 0.0
+                var tokenCount = 0L
+                var firstToken = true
                 conv.sendMessageAsync("hello").collect { msg ->
                     val text = msg.contents.contents
                         .filterIsInstance<Content.Text>()
                         .joinToString("") { it.text }
+                    if (text.isNotEmpty() && firstToken) {
+                        ttftMs = (System.currentTimeMillis() - startTime).toDouble()
+                        firstToken = false
+                    }
+                    tokenCount += text.length / 2L
                     response += text
                 }
+                val totalTimeMs = System.currentTimeMillis() - startTime
+                val decodingTimeMs = totalTimeMs - ttftMs
+                _lastStats.value = InferenceStats(
+                    ttftMs = ttftMs,
+                    promptTokens = 1L,
+                    generatedTokens = tokenCount,
+                    decodingSpeed = if (decodingTimeMs > 0 && tokenCount > 0)
+                        tokenCount / (decodingTimeMs / 1000.0) else 0.0,
+                    device = activeBackend?.displayName ?: "Unknown"
+                )
                 TestResult(response, activeBackend?.displayName ?: "Unknown")
             } finally {
                 conv.close()

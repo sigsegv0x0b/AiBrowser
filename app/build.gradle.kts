@@ -12,7 +12,7 @@ android {
 
     defaultConfig {
         applicationId = "com.aibrowser"
-        minSdk = 26
+        minSdk = 27
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
@@ -38,6 +38,10 @@ android {
 
     buildFeatures {
         compose = true
+    }
+
+    packaging {
+        jniLibs.useLegacyPackaging = true
     }
 }
 
@@ -72,4 +76,7 @@ dependencies {
 
     // LiteRT-LM for on-device LLM inference
     implementation("com.google.ai.edge.litertlm:litertlm-android:latest.release")
+
+    // GenieX SDK for llama.cpp + QAIRT (Qualcomm) on-device inference
+    implementation("com.qualcomm.qti:geniex-android:0.2.6")
 }

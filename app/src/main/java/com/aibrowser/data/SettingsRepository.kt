@@ -11,6 +11,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import com.aibrowser.data.models.ApiConfig
 import com.aibrowser.data.models.BehaviorConfig
 import com.aibrowser.data.models.LocalLlmConfig
+import com.aibrowser.data.models.LlamaCppSettings
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -39,6 +40,17 @@ class SettingsRepository @Inject constructor(
         private val KEY_LOCAL_BACKEND = stringPreferencesKey("local_backend")
         private val KEY_LOCAL_MAX_TOKENS = intPreferencesKey("local_max_tokens")
         private val KEY_NOTES_DIRECTORY_URI = stringPreferencesKey("notes_directory_uri")
+        private val KEY_LLAMACPP_MODEL = stringPreferencesKey("llamacpp_model")
+        private val KEY_LLAMACPP_BACKEND = stringPreferencesKey("llamacpp_backend")
+        private val KEY_LLAMACPP_NGPU_LAYERS = intPreferencesKey("llamacpp_ngpu_layers")
+        private val KEY_LLAMACPP_CONTEXT_WINDOW = intPreferencesKey("llamacpp_context_window")
+        private val KEY_LLAMACPP_MAX_TOKENS = intPreferencesKey("llamacpp_max_tokens")
+        private val KEY_LLAMACPP_TEMPERATURE = stringPreferencesKey("llamacpp_temperature")
+        private val KEY_LLAMACPP_TOP_K = intPreferencesKey("llamacpp_top_k")
+        private val KEY_LLAMACPP_TOP_P = stringPreferencesKey("llamacpp_top_p")
+        private val KEY_HF_TOKEN = stringPreferencesKey("hf_token")
+        private val KEY_HF_DOWNLOADED_MODELS = stringPreferencesKey("hf_downloaded_models")
+        private val KEY_LLAMACPP_USE_CUSTOM_SAMPLER = booleanPreferencesKey("llamacpp_use_custom_sampler")
     }
 
     val apiConfig: Flow<ApiConfig> = context.dataStore.data.map { prefs ->
@@ -127,6 +139,54 @@ class SettingsRepository @Inject constructor(
     suspend fun saveNotesDirectoryUri(uri: String) {
         context.dataStore.edit { prefs ->
             prefs[KEY_NOTES_DIRECTORY_URI] = uri
+        }
+    }
+
+    val llamaCppSettings: Flow<LlamaCppSettings> = context.dataStore.data.map { prefs ->
+        LlamaCppSettings(
+            selectedModel = prefs[KEY_LLAMACPP_MODEL] ?: "",
+            backend = prefs[KEY_LLAMACPP_BACKEND] ?: "cpu",
+            nGpuLayers = prefs[KEY_LLAMACPP_NGPU_LAYERS] ?: 33,
+            contextWindow = prefs[KEY_LLAMACPP_CONTEXT_WINDOW] ?: 8192,
+            maxTokens = prefs[KEY_LLAMACPP_MAX_TOKENS] ?: 4096,
+            temperature = prefs[KEY_LLAMACPP_TEMPERATURE]?.toFloatOrNull() ?: 0.7f,
+            topK = prefs[KEY_LLAMACPP_TOP_K] ?: 40,
+            topP = prefs[KEY_LLAMACPP_TOP_P]?.toFloatOrNull() ?: 0.95f,
+            useCustomSampler = prefs[KEY_LLAMACPP_USE_CUSTOM_SAMPLER] ?: false
+        )
+    }
+
+    suspend fun saveLlamaCppSettings(settings: LlamaCppSettings) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_LLAMACPP_MODEL] = settings.selectedModel
+            prefs[KEY_LLAMACPP_BACKEND] = settings.backend
+            prefs[KEY_LLAMACPP_NGPU_LAYERS] = settings.nGpuLayers
+            prefs[KEY_LLAMACPP_CONTEXT_WINDOW] = settings.contextWindow
+            prefs[KEY_LLAMACPP_MAX_TOKENS] = settings.maxTokens
+            prefs[KEY_LLAMACPP_TEMPERATURE] = settings.temperature.toString()
+            prefs[KEY_LLAMACPP_TOP_K] = settings.topK
+            prefs[KEY_LLAMACPP_TOP_P] = settings.topP.toString()
+            prefs[KEY_LLAMACPP_USE_CUSTOM_SAMPLER] = settings.useCustomSampler
+        }
+    }
+
+    val hfToken: Flow<String?> = context.dataStore.data.map { prefs ->
+        prefs[KEY_HF_TOKEN]
+    }
+
+    suspend fun saveHfToken(token: String) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_HF_TOKEN] = token
+        }
+    }
+
+    val hfDownloadedModels: Flow<String?> = context.dataStore.data.map { prefs ->
+        prefs[KEY_HF_DOWNLOADED_MODELS]
+    }
+
+    suspend fun saveHfDownloadedModels(json: String) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_HF_DOWNLOADED_MODELS] = json
         }
     }
 }
