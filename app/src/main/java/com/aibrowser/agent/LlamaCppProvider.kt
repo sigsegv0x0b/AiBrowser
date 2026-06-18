@@ -35,6 +35,8 @@ class LlamaCppProvider @Inject constructor(
     private var llmWrapper: LlmWrapper? = null
     private var activeModelPath: String? = null
     private var currentBackend: String = "cpu"
+    private var currentNGpuLayers: Int = 0
+    private var currentNCtx: Int = 1024
 
     private val _lastStats = MutableStateFlow<InferenceStats?>(null)
     val lastStats: StateFlow<InferenceStats?> = _lastStats.asStateFlow()
@@ -162,7 +164,19 @@ class LlamaCppProvider @Inject constructor(
         onStatus: (String) -> Unit
     ): LlmWrapper {
         val modelName = settings.selectedModel
-        if (llmWrapper != null && activeModelPath == modelName) return llmWrapper!!
+
+        val backendLower = settings.backend.lowercase()
+        val gpuLayers: Int = when {
+            backendLower == "gpu" -> settings.nGpuLayers.coerceIn(1, 999)
+            backendLower == "npu" -> 999
+            else -> 0
+        }
+        val nCtx = 1024
+
+        if (llmWrapper != null && activeModelPath == modelName &&
+            currentBackend == settings.backend &&
+            currentNGpuLayers == gpuLayers &&
+            currentNCtx == nCtx) return llmWrapper!!
 
         close()
 
@@ -181,21 +195,16 @@ class LlamaCppProvider @Inject constructor(
             throw RuntimeException("Model file is empty: $modelPath")
         }
 
-        val backendLower = settings.backend.lowercase()
         val deviceId: String
-        val gpuLayers: Int
         when {
             backendLower == "gpu" -> {
                 deviceId = DeviceIdValue.GPU.value ?: "gpu"
-                gpuLayers = settings.nGpuLayers.coerceIn(1, 999)
             }
             backendLower == "npu" -> {
                 deviceId = DeviceIdValue.NPU.value ?: "npu"
-                gpuLayers = 999
             }
             else -> {
                 deviceId = DeviceIdValue.NPU.value ?: "npu"
-                gpuLayers = 0
             }
         }
 
@@ -221,6 +230,8 @@ class LlamaCppProvider @Inject constructor(
                 llmWrapper = wrapper
                 activeModelPath = modelName
                 currentBackend = settings.backend
+                currentNGpuLayers = gpuLayers
+                currentNCtx = nCtx
                 onStatus("Model loaded")
             }
             .onFailure { error ->

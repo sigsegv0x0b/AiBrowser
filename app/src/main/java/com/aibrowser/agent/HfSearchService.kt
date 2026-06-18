@@ -1,124 +1,143 @@
 package com.aibrowser.agent
 
-import com.aibrowser.data.models.LLMModel
+import android.util.Log
 import com.google.gson.Gson
-import com.google.gson.JsonParser
+import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import java.util.concurrent.TimeUnit
-import javax.inject.Inject
-import javax.inject.Singleton
+import java.net.HttpURLConnection
+import java.net.URL
 
-data class HfSearchResult(
-    val models: List<LLMModel>,
-    val hasMore: Boolean
-)
+private const val TAG = "HfSearchService"
+private const val HF_API_BASE = "https://huggingface.co/api"
 
-@Singleton
-class HfSearchService @Inject constructor() {
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
-        .addInterceptor { chain ->
-            val request = chain.request().newBuilder()
-                .header("User-Agent", "AiBrowser/1.0")
-                .build()
-            chain.proceed(request)
-        }
-        .build()
-
+class HfSearchService(
+    private val hfToken: String = ""
+) {
     private val gson = Gson()
 
-    suspend fun searchGGUF(
-        query: String,
-        page: Int = 1,
-        token: String? = null
-    ): HfSearchResult = withContext(Dispatchers.IO) {
-        val perPage = 20
-        val url = buildString {
-            append("https://huggingface.co/api/models?search=$query")
-            append("&filter=gguf&sort=downloads&direction=-1")
-            append("&limit=$perPage")
-            if (page > 1) append("&page=$page")
-        }
+    private fun openConnection(urlStr: String): HttpURLConnection {
+        var currentUrl = urlStr
+        var redirectCount = 0
+        val maxRedirects = 5
 
-        val requestBuilder = Request.Builder().url(url)
-        if (!token.isNullOrBlank()) {
-            requestBuilder.header("Authorization", "Bearer $token")
-        }
-
-        val response = client.newCall(requestBuilder.build()).execute()
-        if (!response.isSuccessful) {
-            return@withContext HfSearchResult(emptyList(), false)
-        }
-
-        val body = response.body?.string() ?: return@withContext HfSearchResult(emptyList(), false)
-        val json = JsonParser.parseString(body)
-
-        val models = if (json.isJsonArray) {
-            json.asJsonArray.mapNotNull { el ->
-                parseModel(el.asJsonObject)
+        while (redirectCount < maxRedirects) {
+            val url = URL(currentUrl)
+            val connection = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 15_000
+                readTimeout = 30_000
+                instanceFollowRedirects = false
+                setRequestProperty("User-Agent", "AiBrowser/1.0")
+                setRequestProperty("Accept", "application/json")
+                if (hfToken.isNotEmpty()) {
+                    setRequestProperty("Authorization", "Bearer $hfToken")
+                }
             }
-        } else if (json.isJsonObject && json.asJsonObject.has("items")) {
-            json.asJsonObject.getAsJsonArray("items").mapNotNull { el ->
-                parseModel(el.asJsonObject)
-            }
-        } else {
-            emptyList()
-        }
 
-        HfSearchResult(models, models.size >= perPage)
+            val responseCode = connection.responseCode
+            when {
+                responseCode in 200..299 -> return connection
+                responseCode in 301..308 -> {
+                    val location = connection.getHeaderField("Location")
+                    connection.disconnect()
+                    currentUrl = URL(URL(currentUrl), location).toString()
+                    redirectCount++
+                }
+                else -> {
+                    val errorBody = connection.errorStream?.bufferedReader()?.readText() ?: ""
+                    connection.disconnect()
+                    throw RuntimeException("HTTP $responseCode: $errorBody")
+                }
+            }
+        }
+        throw RuntimeException("Too many redirects")
     }
 
-    private fun parseModel(obj: com.google.gson.JsonObject): LLMModel? {
-        val modelId = obj.get("modelId")?.asString
-            ?: obj.get("id")?.asString
-            ?: return null
+    suspend fun searchModels(query: String): List<HfModelSummary> = withContext(Dispatchers.IO) {
+        val searchQuery = if ("gguf" in query.lowercase()) query else "$query gguf"
+        val encoded = java.net.URLEncoder.encode(searchQuery, "UTF-8")
+        val url = "$HF_API_BASE/models?" +
+                "search=$encoded" +
+                "&task=text-generation" +
+                "&sort=downloads" +
+                "&direction=-1" +
+                "&limit=50"
 
-        val (author, name) = if (modelId.contains("/")) {
-            val parts = modelId.split("/", limit = 2)
-            parts[0] to parts[1]
-        } else {
-            "unknown" to modelId
+        val connection = openConnection(url)
+        try {
+            val body = connection.inputStream.bufferedReader().readText()
+            val listType = object : TypeToken<List<Map<String, Any>>>() {}.type
+            val items: List<Map<String, Any>>? = gson.fromJson(body, listType)
+
+            items?.filter { item ->
+                val tags = (item["tags"] as? List<*>)?.map { it.toString() } ?: emptyList()
+                "gguf" in tags
+            }?.map { item ->
+                HfModelSummary(
+                    modelId = item["id"] as? String ?: "",
+                    downloads = (item["downloads"] as? Double)?.toLong() ?: 0,
+                    likes = (item["likes"] as? Double)?.toLong() ?: 0,
+                    isGated = item["gated"] != null && item["gated"] != false,
+                    trendingScore = (item["trendingScore"] as? Double)?.toInt() ?: 0
+                )
+            } ?: emptyList()
+        } catch (e: Exception) {
+            Log.e(TAG, "searchModels failed for '$query': ${e.message}")
+            throw e
+        } finally {
+            connection.disconnect()
         }
-
-        val siblings = obj.getAsJsonArray("siblings") ?: return null
-        val ggufFiles = siblings.mapNotNull { it.asJsonObject }
-            .filter { it.get("rfilename")?.asString?.endsWith(".gguf") == true }
-
-        if (ggufFiles.isEmpty()) return null
-
-        val primaryFile = ggufFiles.first()
-        val filename = primaryFile.get("rfilename")?.asString ?: return null
-
-        val sizeBytes = primaryFile.get("size")?.asLong ?: 0L
-        val sizeGb = sizeBytes.toFloat() / (1024 * 1024 * 1024)
-
-        val displayName = name.replace("-", " ").replace("_", " ")
-        val quant = extractQuant(filename)
-
-        return LLMModel(
-            id = modelId,
-            repo = modelId,
-            filename = filename,
-            displayName = "$displayName ($quant)",
-            sizeGb = sizeGb,
-            quant = quant
-        )
     }
 
-    private fun extractQuant(filename: String): String {
-        val patterns = listOf(
-            "Q[0-9]_[0-9]", "Q[0-9]", "q[0-9]_[0-9]", "q[0-9]",
-            "IQ[0-9]_[0-9A-Za-z]+", "IQ[0-9]",
-            "F16", "F32", "BF16", "bf16", "fp16", "fp32"
-        )
-        for (pat in patterns) {
-            val match = Regex(pat, RegexOption.IGNORE_CASE).find(filename)
-            if (match != null) return match.value
+    suspend fun getModelFiles(modelId: String): List<HfFileInfo> = withContext(Dispatchers.IO) {
+        val url = "$HF_API_BASE/models/$modelId/tree/main"
+        Log.d(TAG, "Fetching files: $url")
+
+        val connection = openConnection(url)
+        try {
+            val body = connection.inputStream.bufferedReader().readText()
+            val listType = object : TypeToken<List<Map<String, Any>>>() {}.type
+            val items: List<Map<String, Any>>? = gson.fromJson(body, listType)
+
+            items?.filter { item ->
+                val path = item["path"] as? String ?: ""
+                item["type"] == "file" && path.endsWith(".gguf")
+            }?.mapNotNull { item ->
+                val path = item["path"] as? String ?: return@mapNotNull null
+                val lfs = item["lfs"] as? Map<*, *>
+                val size = if (lfs != null) {
+                    (lfs["size"] as? Double)?.toLong() ?: 0L
+                } else {
+                    (item["size"] as? Double)?.toLong() ?: 0L
+                }
+                HfFileInfo(filename = path, size = size)
+            }?.sortedBy { it.size } ?: emptyList()
+        } catch (e: Exception) {
+            Log.e(TAG, "getModelFiles failed for '$modelId': ${e.message}")
+            throw e
+        } finally {
+            connection.disconnect()
         }
-        return "unknown"
+    }
+
+    companion object {
+        fun extractQuantLabel(filename: String): String {
+            val name = filename.removeSuffix(".gguf")
+            val parts = name.split("-")
+            val last = parts.lastOrNull()
+            if (last != null && last.matches(Regex("^[QqIi][0-9BLK_MSX.]+$"))) return last
+            val quantMatch = Regex("[Qq]\\d+[LKMSX_.]*|[Ii][Qq]\\d+[XS_.]*").find(name)
+            return quantMatch?.value ?: last ?: name
+        }
+
+        fun buildDownloadUrl(modelId: String, filename: String): String {
+            return "https://huggingface.co/$modelId/resolve/main/$filename"
+        }
+
+        fun formatSizeMb(bytes: Long): String {
+            val mb = bytes.toDouble() / (1024.0 * 1024.0)
+            return "${"%.0f".format(mb)} MB"
+        }
     }
 }
