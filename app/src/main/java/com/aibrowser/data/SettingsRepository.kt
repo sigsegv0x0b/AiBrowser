@@ -8,10 +8,11 @@ import androidx.datastore.preferences.preferencesDataStore
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import com.aibrowser.agent.mnn.market.DownloadedMnnModel
 import com.aibrowser.data.models.ApiConfig
 import com.aibrowser.data.models.BehaviorConfig
-import com.aibrowser.data.models.LocalLlmConfig
-import com.aibrowser.data.models.LlamaCppSettings
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -35,22 +36,12 @@ class SettingsRepository @Inject constructor(
         private val KEY_BLOCK_EXTERNAL_INTENTS = booleanPreferencesKey("block_external_intents")
         private val KEY_TTS_PROMPT = stringPreferencesKey("tts_prompt")
         private val KEY_SYSTEM_PROMPT = stringPreferencesKey("system_prompt")
-        private val KEY_LOCAL_MODEL_PATH = stringPreferencesKey("local_model_path")
-        private val KEY_LOCAL_MODEL_ID = stringPreferencesKey("local_model_id")
-        private val KEY_LOCAL_BACKEND = stringPreferencesKey("local_backend")
-        private val KEY_LOCAL_MAX_TOKENS = intPreferencesKey("local_max_tokens")
         private val KEY_NOTES_DIRECTORY_URI = stringPreferencesKey("notes_directory_uri")
-        private val KEY_LLAMACPP_MODEL = stringPreferencesKey("llamacpp_model")
-        private val KEY_LLAMACPP_BACKEND = stringPreferencesKey("llamacpp_backend")
-        private val KEY_LLAMACPP_NGPU_LAYERS = intPreferencesKey("llamacpp_ngpu_layers")
-        private val KEY_LLAMACPP_CONTEXT_WINDOW = intPreferencesKey("llamacpp_context_window")
-        private val KEY_LLAMACPP_MAX_TOKENS = intPreferencesKey("llamacpp_max_tokens")
-        private val KEY_LLAMACPP_TEMPERATURE = stringPreferencesKey("llamacpp_temperature")
-        private val KEY_LLAMACPP_TOP_K = intPreferencesKey("llamacpp_top_k")
-        private val KEY_LLAMACPP_TOP_P = stringPreferencesKey("llamacpp_top_p")
-        private val KEY_HF_TOKEN = stringPreferencesKey("hf_token")
-        private val KEY_HF_DOWNLOADED_MODELS = stringPreferencesKey("hf_downloaded_models")
-        private val KEY_LLAMACPP_USE_CUSTOM_SAMPLER = booleanPreferencesKey("llamacpp_use_custom_sampler")
+        private val KEY_MNN_MODEL_PATH = stringPreferencesKey("mnn_model_path")
+        private val KEY_MNN_BACKEND = stringPreferencesKey("mnn_backend")
+        private val KEY_MNN_USE_MMAP = booleanPreferencesKey("mnn_use_mmap")
+        private val KEY_MNN_DOWNLOADS = stringPreferencesKey("mnn_downloads")
+        private val gson = Gson()
     }
 
     val apiConfig: Flow<ApiConfig> = context.dataStore.data.map { prefs ->
@@ -107,28 +98,33 @@ class SettingsRepository @Inject constructor(
         }
     }
 
-    val localLlmConfig: Flow<LocalLlmConfig> = context.dataStore.data.map { prefs ->
-        val backendName = prefs[KEY_LOCAL_BACKEND] ?: LocalLlmConfig.Backend.AUTO.name
-        val backend = try {
-            LocalLlmConfig.Backend.valueOf(backendName)
-        } catch (_: Exception) {
-            LocalLlmConfig.Backend.AUTO
-        }
-        LocalLlmConfig(
-            downloadedModelPath = prefs[KEY_LOCAL_MODEL_PATH] ?: "",
-            downloadedModelId = prefs[KEY_LOCAL_MODEL_ID] ?: "",
-            backend = backend,
-            maxTokens = prefs[KEY_LOCAL_MAX_TOKENS] ?: 0
-        )
+    val mnnModelPath: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[KEY_MNN_MODEL_PATH] ?: ""
     }
 
-    suspend fun saveLocalLlmConfig(config: LocalLlmConfig) {
+    suspend fun saveMnnModelPath(path: String) {
         context.dataStore.edit { prefs ->
-            prefs[KEY_LOCAL_MODEL_PATH] = config.downloadedModelPath
-            prefs[KEY_LOCAL_MODEL_ID] = config.downloadedModelId
-            prefs[KEY_LOCAL_BACKEND] = config.backend.name
-            if (config.maxTokens > 0) prefs[KEY_LOCAL_MAX_TOKENS] = config.maxTokens
-            else prefs.remove(KEY_LOCAL_MAX_TOKENS)
+            prefs[KEY_MNN_MODEL_PATH] = path
+        }
+    }
+
+    val mnnBackend: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[KEY_MNN_BACKEND] ?: "cpu"
+    }
+
+    suspend fun saveMnnBackend(backend: String) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_MNN_BACKEND] = backend
+        }
+    }
+
+    val mnnUseMmap: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[KEY_MNN_USE_MMAP] ?: false
+    }
+
+    suspend fun saveMnnUseMmap(enable: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_MNN_USE_MMAP] = enable
         }
     }
 
@@ -142,51 +138,71 @@ class SettingsRepository @Inject constructor(
         }
     }
 
-    val llamaCppSettings: Flow<LlamaCppSettings> = context.dataStore.data.map { prefs ->
-        LlamaCppSettings(
-            selectedModel = prefs[KEY_LLAMACPP_MODEL] ?: "",
-            backend = prefs[KEY_LLAMACPP_BACKEND] ?: "cpu",
-            nGpuLayers = prefs[KEY_LLAMACPP_NGPU_LAYERS] ?: 33,
-            contextWindow = prefs[KEY_LLAMACPP_CONTEXT_WINDOW] ?: 8192,
-            maxTokens = prefs[KEY_LLAMACPP_MAX_TOKENS] ?: 4096,
-            temperature = prefs[KEY_LLAMACPP_TEMPERATURE]?.toFloatOrNull() ?: 0.7f,
-            topK = prefs[KEY_LLAMACPP_TOP_K] ?: 40,
-            topP = prefs[KEY_LLAMACPP_TOP_P]?.toFloatOrNull() ?: 0.95f,
-            useCustomSampler = prefs[KEY_LLAMACPP_USE_CUSTOM_SAMPLER] ?: false
-        )
-    }
-
-    suspend fun saveLlamaCppSettings(settings: LlamaCppSettings) {
-        context.dataStore.edit { prefs ->
-            prefs[KEY_LLAMACPP_MODEL] = settings.selectedModel
-            prefs[KEY_LLAMACPP_BACKEND] = settings.backend
-            prefs[KEY_LLAMACPP_NGPU_LAYERS] = settings.nGpuLayers
-            prefs[KEY_LLAMACPP_CONTEXT_WINDOW] = settings.contextWindow
-            prefs[KEY_LLAMACPP_MAX_TOKENS] = settings.maxTokens
-            prefs[KEY_LLAMACPP_TEMPERATURE] = settings.temperature.toString()
-            prefs[KEY_LLAMACPP_TOP_K] = settings.topK
-            prefs[KEY_LLAMACPP_TOP_P] = settings.topP.toString()
-            prefs[KEY_LLAMACPP_USE_CUSTOM_SAMPLER] = settings.useCustomSampler
+    val downloadedModels: Flow<List<DownloadedMnnModel>> = context.dataStore.data.map { prefs ->
+        val json = prefs[KEY_MNN_DOWNLOADS] ?: "[]"
+        try {
+            gson.fromJson(json, object : TypeToken<List<DownloadedMnnModel>>() {}.type)
+        } catch (_: Exception) {
+            emptyList()
         }
     }
 
-    val hfToken: Flow<String?> = context.dataStore.data.map { prefs ->
-        prefs[KEY_HF_TOKEN]
-    }
-
-    suspend fun saveHfToken(token: String) {
+    suspend fun saveDownloadedModel(model: DownloadedMnnModel) {
         context.dataStore.edit { prefs ->
-            prefs[KEY_HF_TOKEN] = token
+            val json = prefs[KEY_MNN_DOWNLOADS] ?: "[]"
+            val list: MutableList<DownloadedMnnModel> = try {
+                gson.fromJson(json, object : TypeToken<List<DownloadedMnnModel>>() {}.type)
+            } catch (_: Exception) {
+                mutableListOf()
+            }
+            val existing = list.indexOfFirst { it.modelId == model.modelId }
+            if (existing >= 0) list[existing] = model else list.add(model)
+            prefs[KEY_MNN_DOWNLOADS] = gson.toJson(list)
         }
     }
 
-    val hfDownloadedModels: Flow<String?> = context.dataStore.data.map { prefs ->
-        prefs[KEY_HF_DOWNLOADED_MODELS]
+    suspend fun removeDownloadedModel(modelId: String) {
+        context.dataStore.edit { prefs ->
+            val json = prefs[KEY_MNN_DOWNLOADS] ?: "[]"
+            val list: MutableList<DownloadedMnnModel> = try {
+                gson.fromJson(json, object : TypeToken<List<DownloadedMnnModel>>() {}.type)
+            } catch (_: Exception) {
+                mutableListOf()
+            }
+            list.removeAll { it.modelId == modelId }
+            prefs[KEY_MNN_DOWNLOADS] = gson.toJson(list)
+        }
     }
 
-    suspend fun saveHfDownloadedModels(json: String) {
+    suspend fun updateDownloadProgress(modelId: String, downloadedBytes: Long) {
         context.dataStore.edit { prefs ->
-            prefs[KEY_HF_DOWNLOADED_MODELS] = json
+            val json = prefs[KEY_MNN_DOWNLOADS] ?: "[]"
+            val list: MutableList<DownloadedMnnModel> = try {
+                gson.fromJson(json, object : TypeToken<List<DownloadedMnnModel>>() {}.type)
+            } catch (_: Exception) {
+                mutableListOf()
+            }
+            val idx = list.indexOfFirst { it.modelId == modelId }
+            if (idx >= 0 && !list[idx].complete) {
+                list[idx] = list[idx].copy(downloadedBytes = downloadedBytes)
+                prefs[KEY_MNN_DOWNLOADS] = gson.toJson(list)
+            }
+        }
+    }
+
+    suspend fun markDownloadComplete(modelId: String, totalBytes: Long) {
+        context.dataStore.edit { prefs ->
+            val json = prefs[KEY_MNN_DOWNLOADS] ?: "[]"
+            val list: MutableList<DownloadedMnnModel> = try {
+                gson.fromJson(json, object : TypeToken<List<DownloadedMnnModel>>() {}.type)
+            } catch (_: Exception) {
+                mutableListOf()
+            }
+            val idx = list.indexOfFirst { it.modelId == modelId }
+            if (idx >= 0) {
+                list[idx] = list[idx].copy(complete = true, downloadedBytes = totalBytes, totalBytes = totalBytes)
+                prefs[KEY_MNN_DOWNLOADS] = gson.toJson(list)
+            }
         }
     }
 }

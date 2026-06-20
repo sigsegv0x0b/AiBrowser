@@ -33,7 +33,7 @@ fun CloudLlmTab(
     var baseUrl by remember(config) { mutableStateOf(config.baseUrl) }
     var contextSize by remember(config) { mutableStateOf(config.contextSize.toString()) }
     var maxOutputTokens by remember(config) { mutableStateOf(config.maxOutputTokens.toString()) }
-    var useCustomModel by remember(config) { mutableStateOf(config.model.isNotEmpty() && config.provider != ApiConfig.ApiProvider.CLAUDE && config.provider != ApiConfig.ApiProvider.LOCAL_LLAMACPP && config.provider != ApiConfig.ApiProvider.LOCAL_LITERT) }
+    var useCustomModel by remember(config) { mutableStateOf(config.model.isNotEmpty() && config.provider != ApiConfig.ApiProvider.CLAUDE && config.provider != ApiConfig.ApiProvider.LOCAL_MNN) }
 
     var fetchedModels by remember { mutableStateOf<List<ModelInfo>>(emptyList()) }
     var isFetching by remember { mutableStateOf(false) }
@@ -66,7 +66,7 @@ fun CloudLlmTab(
                 expanded = providerExpanded,
                 onDismissRequest = { providerExpanded = false }
             ) {
-                ApiConfig.ApiProvider.entries.filter { it != ApiConfig.ApiProvider.LOCAL_LLAMACPP && it != ApiConfig.ApiProvider.LOCAL_LITERT }.forEach { p ->
+                ApiConfig.ApiProvider.entries.filter { it != ApiConfig.ApiProvider.LOCAL_MNN }.forEach { p ->
                     DropdownMenuItem(
                         text = { Text(p.displayName) },
                         onClick = {

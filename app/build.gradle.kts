@@ -74,9 +74,5 @@ dependencies {
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.documentfile:documentfile:1.0.1")
 
-    // LiteRT-LM for on-device LLM inference
-    implementation("com.google.ai.edge.litertlm:litertlm-android:latest.release")
-
-    // GenieX SDK for llama.cpp + QAIRT (Qualcomm) on-device inference
-    implementation("com.qualcomm.qti:geniex-android:0.2.6")
+    // MNN for on-device LLM inference (native lib built separately)
 }

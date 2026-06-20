@@ -15,10 +15,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.compose.rememberNavController
 import com.aibrowser.agent.AgentViewModel
 import com.aibrowser.agent.AiService
-import com.aibrowser.agent.LlamaCppProvider
-import com.aibrowser.agent.LocalLlmProvider
-import com.aibrowser.agent.LocalModelManager
-import com.aibrowser.agent.ModelDownloader
+import com.aibrowser.agent.MnnLlmProvider
 import com.aibrowser.browser.BrowserViewModel
 import com.aibrowser.data.SettingsRepository
 import com.aibrowser.ui.navigation.NavGraph
@@ -36,16 +33,7 @@ class MainActivity : ComponentActivity() {
     lateinit var aiService: AiService
 
     @Inject
-    lateinit var localModelManager: LocalModelManager
-
-    @Inject
-    lateinit var localLlmProvider: LocalLlmProvider
-
-    @Inject
-    lateinit var llamaCppProvider: LlamaCppProvider
-
-    @Inject
-    lateinit var modelDownloader: ModelDownloader
+    lateinit var mnnLlmProvider: MnnLlmProvider
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -74,10 +62,7 @@ class MainActivity : ComponentActivity() {
                         agentViewModel = agentViewModel,
                         settingsRepository = settingsRepository,
                         aiService = aiService,
-                        localModelManager = localModelManager,
-                        localLlmProvider = localLlmProvider,
-                        llamaCppProvider = llamaCppProvider,
-                        modelDownloader = modelDownloader
+                        mnnLlmProvider = mnnLlmProvider
                     )
                 }
             }
