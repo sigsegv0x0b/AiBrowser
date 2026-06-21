@@ -102,6 +102,8 @@ class AgentViewModel @Inject constructor(
                 "file_read" -> "Reading file"
                 "file_write" -> "Writing file"
                 "file_list" -> "Listing directory"
+                "get_location" -> "Getting location"
+                "dateTime" -> "Getting date and time"
                 else -> "Executing $name"
             }
         }
@@ -259,13 +261,14 @@ class AgentViewModel @Inject constructor(
         syncFlowsFromTab(tabId)
     }
 
-    private fun tabAppendToolResult(tabId: String, content: String, toolCallId: String) {
+    private fun tabAppendToolResult(tabId: String, content: String, toolCallId: String, toolName: String? = null) {
         tabManager.updateTab(tabId) { tab ->
             tab.copy(messages = tab.messages + Message(
                 id = UUID.randomUUID().toString(),
                 role = Message.Role.TOOL,
                 content = content,
-                toolCallId = toolCallId
+                toolCallId = toolCallId,
+                toolName = toolName
             ))
         }
         syncFlowsFromTab(tabId)
@@ -330,7 +333,7 @@ class AgentViewModel @Inject constructor(
             tabUpdateToolCallStatus(tabId, toolCall.id, ToolCall.ToolStatus.RUNNING)
             val result = mcpController.executeToolCall(toolCall)
             tabUpdateToolCallStatus(tabId, toolCall.id, result.status, result.result)
-            tabAppendToolResult(tabId, result.result ?: "No result", toolCall.id)
+            tabAppendToolResult(tabId, result.result ?: "No result", toolCall.id, toolCall.name)
         }
 
         val prevAction = tabManager.getTab(tabId)?.currentAction ?: ""
@@ -460,7 +463,7 @@ class AgentViewModel @Inject constructor(
 
     fun addSystemMessage(content: String) {
         val tabId = currentTabId ?: return
-        tabAppendToolResult(tabId, "[Intent blocked] $content", "external_intent")
+        tabAppendToolResult(tabId, "[Intent blocked] $content", "external_intent", "Intent Blocked")
     }
 
     private fun saveToTab(tabId: String?) {

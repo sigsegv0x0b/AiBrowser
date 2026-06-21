@@ -35,7 +35,8 @@ class MnnLlmProvider @Inject constructor(
         ensureSession(modelPath, settings)
         pauseKeepAlive()
 
-        val prompt = buildPrompt(messages, session?.modelType ?: "", session?.isClaudeDistilled ?: false)
+        val behavior = settingsRepository.behaviorConfig.first()
+        val prompt = buildPrompt(messages, session?.modelType ?: "", session?.isClaudeDistilled ?: false, behavior.locationEnabled)
         var fullResponse = ""
         var toolCalls = false
 
@@ -198,7 +199,7 @@ class MnnLlmProvider @Inject constructor(
         }
     }
 
-    private fun buildPrompt(messages: List<Message>, modelType: String, isClaudeDistilled: Boolean): String {
+    private fun buildPrompt(messages: List<Message>, modelType: String, isClaudeDistilled: Boolean, locationEnabled: Boolean): String {
         val isLfm = modelType.equals("lfm2", ignoreCase = true)
         val isDistilled = isClaudeDistilled
         val hasTools = true
@@ -221,7 +222,7 @@ class MnnLlmProvider @Inject constructor(
                     if (hasTools) {
                         if (isLfm) {
                             sb.append("List of tools: [")
-                            val tools = ToolDefinitions.getToolsForApi()
+                            val tools = ToolDefinitions.getToolsForApi(locationEnabled)
                             tools.forEachIndexed { idx, tool ->
                                 sb.append(gson.toJson(tool))
                                 if (idx < tools.size - 1) sb.append(", ")
@@ -231,7 +232,7 @@ class MnnLlmProvider @Inject constructor(
                         } else if (isDistilled) {
                             sb.append("# Tools\n\nYou may call one or more functions to assist with the user query.\n\n")
                             sb.append("You are provided with function signatures within <tools></tools> XML tags:\n<tools>\n")
-                            for (tool in ToolDefinitions.getToolsForApi()) {
+                            for (tool in ToolDefinitions.getToolsForApi(locationEnabled)) {
                                 sb.append(gson.toJson(tool)).append("\n")
                             }
                             sb.append("</tools>\n\n")
@@ -239,7 +240,7 @@ class MnnLlmProvider @Inject constructor(
                             sb.append("<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>\n\n")
                         } else {
                             sb.append("# Tools\n\nYou have access to the following functions:\n\n<tools>\n")
-                            for (tool in ToolDefinitions.getToolsForApi()) {
+                            for (tool in ToolDefinitions.getToolsForApi(locationEnabled)) {
                                 sb.append(gson.toJson(tool)).append("\n")
                             }
                             sb.append("</tools>\n\n")

@@ -2,6 +2,7 @@ package com.aibrowser.ui.screens.settings
 import kotlinx.coroutines.launch
 
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -19,6 +20,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
 import com.aibrowser.browser.TabManager
 import com.aibrowser.data.SettingsRepository
@@ -38,6 +40,7 @@ fun BehaviorSettingsTab(
 ) {
     var scrollIntoView by remember(behavior) { mutableStateOf(behavior.scrollIntoView) }
     var blockExternalIntents by remember(behavior) { mutableStateOf(behavior.blockExternalIntents) }
+    var locationEnabled by remember(behavior) { mutableStateOf(behavior.locationEnabled) }
     var ttsPrompt by remember(behavior) { mutableStateOf(behavior.ttsPrompt) }
     var systemPrompt by remember(behavior) { mutableStateOf(behavior.systemPrompt) }
 
@@ -76,6 +79,26 @@ fun BehaviorSettingsTab(
         }
     }
 
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            scope.launch {
+                settingsRepository.saveBehaviorConfig(
+                    BehaviorConfig(
+                        scrollIntoView = scrollIntoView,
+                        blockExternalIntents = blockExternalIntents,
+                        locationEnabled = true,
+                        ttsPrompt = ttsPrompt,
+                        systemPrompt = systemPrompt
+                    )
+                )
+            }
+        } else {
+            locationEnabled = false
+        }
+    }
+
     val snackbarHostState = remember { SnackbarHostState() }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -108,6 +131,56 @@ fun BehaviorSettingsTab(
                 }
                 Spacer(Modifier.width(16.dp))
                 Switch(checked = blockExternalIntents, onCheckedChange = { blockExternalIntents = it })
+            }
+
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Enable location tool", style = MaterialTheme.typography.bodyLarge)
+                    Spacer(Modifier.height(4.dp))
+                    Text("Allows the AI agent to get the device's GPS coordinates and address.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Spacer(Modifier.width(16.dp))
+                Switch(
+                    checked = locationEnabled,
+                    onCheckedChange = { enabled ->
+                        if (enabled) {
+                            val granted = ContextCompat.checkSelfPermission(
+                                context, android.Manifest.permission.ACCESS_FINE_LOCATION
+                            ) == PackageManager.PERMISSION_GRANTED
+                            if (granted) {
+                                locationEnabled = true
+                                scope.launch {
+                                    settingsRepository.saveBehaviorConfig(
+                                        BehaviorConfig(
+                                            scrollIntoView = scrollIntoView,
+                                            blockExternalIntents = blockExternalIntents,
+                                            locationEnabled = true,
+                                            ttsPrompt = ttsPrompt,
+                                            systemPrompt = systemPrompt
+                                        )
+                                    )
+                                }
+                            } else {
+                                locationEnabled = true
+                                locationPermissionLauncher.launch(android.Manifest.permission.ACCESS_FINE_LOCATION)
+                            }
+                        } else {
+                            locationEnabled = false
+                            scope.launch {
+                                settingsRepository.saveBehaviorConfig(
+                                    BehaviorConfig(
+                                        scrollIntoView = scrollIntoView,
+                                        blockExternalIntents = blockExternalIntents,
+                                        locationEnabled = false,
+                                        ttsPrompt = ttsPrompt,
+                                        systemPrompt = systemPrompt
+                                    )
+                                )
+                            }
+                        }
+                    }
+                )
             }
 
             HorizontalDivider()
@@ -193,6 +266,7 @@ fun BehaviorSettingsTab(
                     onSave(BehaviorConfig(
                         scrollIntoView = scrollIntoView,
                         blockExternalIntents = blockExternalIntents,
+                        locationEnabled = locationEnabled,
                         ttsPrompt = ttsPrompt,
                         systemPrompt = systemPrompt
                     ))

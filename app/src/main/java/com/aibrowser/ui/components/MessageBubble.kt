@@ -99,7 +99,7 @@ fun MessageBubble(
         }
         if (message.content.isNotBlank()) {
             if (isTool) {
-                CollapsibleToolContent(message.content, bubbleColor)
+                CollapsibleToolContent(message.content, bubbleColor, message.toolName)
             } else {
                 Box(
                     modifier = Modifier
@@ -344,7 +344,7 @@ private fun findTableEnd(text: String, start: Int): Int {
 }
 
 @Composable
-private fun CollapsibleToolContent(content: String, backgroundColor: Color) {
+private fun CollapsibleToolContent(content: String, backgroundColor: Color, toolName: String? = null) {
     var expanded by remember { mutableStateOf(false) }
     val previewLines = if (content.lines().firstOrNull()?.let { it.startsWith("URL:") } == true) {
         content.lines().take(3).joinToString("\n")
@@ -361,7 +361,7 @@ private fun CollapsibleToolContent(content: String, backgroundColor: Color) {
         Column(modifier = Modifier.clickable { expanded = !expanded }.padding(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = "Snapshot Result",
+                    text = toolName?.replace("browser_", "")?.replace("_", " ")?.replaceFirstChar { it.uppercase() } ?: "Result",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

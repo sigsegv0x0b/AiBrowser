@@ -1,7 +1,13 @@
 package com.aibrowser.agent
 
 import android.content.Context
+import android.content.pm.PackageManager
+import android.location.Geocoder
+import android.location.Location
+import android.location.LocationManager
 import android.net.Uri
+import android.os.Looper
+import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
 import com.aibrowser.browser.TabManager
 import com.aibrowser.data.SettingsRepository
@@ -16,6 +22,10 @@ import kotlinx.coroutines.withTimeout
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.text.SimpleDateFormat
+import java.time.DayOfWeek
+import java.time.ZoneId
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
 import java.util.Date
 import java.util.Locale
 import kotlin.coroutines.resume
@@ -117,6 +127,8 @@ class ToolExecutor @Inject constructor(
                     startLine = (arguments["startLine"] as? Double)?.toInt(),
                     count = (arguments["count"] as? Double)?.toInt()
                 )
+                "get_location" -> getLocation()
+                "dateTime" -> getDateTime()
                 else -> "Unknown tool: $toolName"
             }
         }
@@ -854,5 +866,62 @@ class ToolExecutor @Inject constructor(
             bytes < 1024 * 1024 * 1024 -> "%.1f MB".format(bytes / (1024.0 * 1024))
             else -> "%.1f GB".format(bytes / (1024.0 * 1024 * 1024))
         }
+    }
+
+    private suspend fun getLocation(): String = withContext(Dispatchers.IO) {
+        val fineGranted = ContextCompat.checkSelfPermission(
+            context, android.Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+        val coarseGranted = ContextCompat.checkSelfPermission(
+            context, android.Manifest.permission.ACCESS_COARSE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!fineGranted && !coarseGranted) {
+            return@withContext "Location permission not granted. Enable it in Settings > Behavior."
+        }
+
+        val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        val providers = mutableListOf<String>()
+        if (fineGranted) providers.add(LocationManager.GPS_PROVIDER)
+        if (coarseGranted) providers.add(LocationManager.NETWORK_PROVIDER)
+
+        var bestLocation: Location? = null
+        for (provider in providers) {
+            try {
+                val loc = lm.getLastKnownLocation(provider) ?: continue
+                if (bestLocation == null || loc.accuracy < bestLocation.accuracy) {
+                    bestLocation = loc
+                }
+            } catch (_: SecurityException) {}
+        }
+
+        val location = bestLocation ?: return@withContext "No location available. Try opening a maps app to refresh GPS."
+
+        val addressStr = try {
+            val geocoder = Geocoder(context, Locale.getDefault())
+            val addresses = geocoder.getFromLocation(location.latitude, location.longitude, 1)
+            if (addresses != null && addresses.isNotEmpty()) {
+                addresses[0].getAddressLine(0) ?: "Unknown"
+            } else "Unknown"
+        } catch (_: Exception) { "Unknown" }
+
+        """{"lat": ${location.latitude}, "lon": ${location.longitude}, "accuracy": ${location.accuracy.toInt()}, "address": "$addressStr"}"""
+    }
+
+    private fun getDateTime(): String {
+        val now = ZonedDateTime.now()
+        val zone = ZoneId.systemDefault()
+        val isoFormatter = DateTimeFormatter.ISO_OFFSET_DATE_TIME
+        val localFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+        val offsetStr = now.offset.toString()
+        val dayOfWeek = when (now.dayOfWeek) {
+            DayOfWeek.MONDAY -> "Monday"
+            DayOfWeek.TUESDAY -> "Tuesday"
+            DayOfWeek.WEDNESDAY -> "Wednesday"
+            DayOfWeek.THURSDAY -> "Thursday"
+            DayOfWeek.FRIDAY -> "Friday"
+            DayOfWeek.SATURDAY -> "Saturday"
+            DayOfWeek.SUNDAY -> "Sunday"
+        }
+        return """{"iso8601": "${now.format(isoFormatter)}", "local": "${now.format(localFormatter)}", "date": "${now.toLocalDate()}", "time": "${now.toLocalTime().toString().take(8)}", "timezone": "$zone", "timezoneOffset": "$offsetStr", "dayOfWeek": "$dayOfWeek", "unixTimestamp": ${now.toEpochSecond()}}"""
     }
 }

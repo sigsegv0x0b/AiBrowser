@@ -1,15 +1,20 @@
 package com.aibrowser.browser
 
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.aibrowser.data.SettingsRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @HiltViewModel
 class BrowserViewModel @Inject constructor(
-    private val tabManager: TabManager
+    private val tabManager: TabManager,
+    private val settingsRepository: SettingsRepository
 ) : ViewModel() {
 
     private val _tabs = MutableStateFlow<List<TabState>>(emptyList())
@@ -19,10 +24,15 @@ class BrowserViewModel @Inject constructor(
     val activeTabId: StateFlow<String?> = _activeTabId.asStateFlow()
 
     init {
-        if (tabManager.tabs.isEmpty()) {
-            tabManager.createTab("https://www.google.com")
+        viewModelScope.launch {
+            val persisted = settingsRepository.persistedTabs.first()
+            if (persisted.isNotEmpty()) {
+                tabManager.restoreTabs(persisted)
+            } else if (tabManager.tabs.isEmpty()) {
+                tabManager.createTab("https://www.google.com")
+            }
+            refresh()
         }
-        refresh()
     }
 
     fun createTab(url: String = "about:blank") {

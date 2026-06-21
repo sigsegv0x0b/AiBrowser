@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.aibrowser.agent.mnn.market.DownloadedMnnModel
+import com.aibrowser.browser.PersistedTab
 import com.aibrowser.data.models.ApiConfig
 import com.aibrowser.data.models.BehaviorConfig
 import com.aibrowser.data.models.CloudProvider
@@ -36,6 +37,7 @@ class SettingsRepository @Inject constructor(
         private val KEY_MAX_OUTPUT = intPreferencesKey("max_output")
         private val KEY_SCROLL_INTO_VIEW = booleanPreferencesKey("scroll_into_view")
         private val KEY_BLOCK_EXTERNAL_INTENTS = booleanPreferencesKey("block_external_intents")
+        private val KEY_LOCATION_ENABLED = booleanPreferencesKey("location_enabled")
         private val KEY_TTS_PROMPT = stringPreferencesKey("tts_prompt")
         private val KEY_SYSTEM_PROMPT = stringPreferencesKey("system_prompt")
         private val KEY_NOTES_DIRECTORY_URI = stringPreferencesKey("notes_directory_uri")
@@ -53,6 +55,7 @@ class SettingsRepository @Inject constructor(
         private val KEY_CLOUD_PROVIDERS = stringPreferencesKey("cloud_providers")
         private val KEY_ACTIVE_PROVIDER_ID = stringPreferencesKey("active_provider_id")
         private val KEY_CLOUD_MIGRATED = booleanPreferencesKey("cloud_migrated")
+        private val KEY_TABS = stringPreferencesKey("tabs")
         private val gson = Gson()
     }
 
@@ -181,6 +184,7 @@ class SettingsRepository @Inject constructor(
         BehaviorConfig(
             scrollIntoView = prefs[KEY_SCROLL_INTO_VIEW] ?: true,
             blockExternalIntents = prefs[KEY_BLOCK_EXTERNAL_INTENTS] ?: true,
+            locationEnabled = prefs[KEY_LOCATION_ENABLED] ?: false,
             ttsPrompt = prefs[KEY_TTS_PROMPT] ?: BehaviorConfig.DEFAULT_TTS_PROMPT,
             systemPrompt = prefs[KEY_SYSTEM_PROMPT] ?: BehaviorConfig.DEFAULT_SYSTEM_PROMPT
         )
@@ -190,6 +194,7 @@ class SettingsRepository @Inject constructor(
         context.dataStore.edit { prefs ->
             prefs[KEY_SCROLL_INTO_VIEW] = config.scrollIntoView
             prefs[KEY_BLOCK_EXTERNAL_INTENTS] = config.blockExternalIntents
+            prefs[KEY_LOCATION_ENABLED] = config.locationEnabled
             prefs[KEY_TTS_PROMPT] = config.ttsPrompt
             prefs[KEY_SYSTEM_PROMPT] = config.systemPrompt
         }
@@ -370,6 +375,21 @@ class SettingsRepository @Inject constructor(
                 list[idx] = list[idx].copy(complete = true, downloadedBytes = totalBytes, totalBytes = totalBytes)
                 prefs[KEY_MNN_DOWNLOADS] = gson.toJson(list)
             }
+        }
+    }
+
+    val persistedTabs: Flow<List<PersistedTab>> = context.dataStore.data.map { prefs ->
+        val json = prefs[KEY_TABS] ?: "[]"
+        try {
+            gson.fromJson(json, object : TypeToken<List<PersistedTab>>() {}.type)
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    suspend fun saveTabs(tabs: List<PersistedTab>) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_TABS] = gson.toJson(tabs)
         }
     }
 }

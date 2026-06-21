@@ -6,6 +6,7 @@ data class Message(
     val content: String,
     val toolCalls: List<ToolCall> = emptyList(),
     val toolCallId: String? = null,
+    val toolName: String? = null,
     val thinking: String? = null,
     val timestamp: Long = System.currentTimeMillis()
 ) {

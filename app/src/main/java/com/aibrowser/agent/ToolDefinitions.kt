@@ -263,11 +263,28 @@ object ToolDefinitions {
                     "count": {"type": "integer", "description": "Maximum number of entries to return"}
                 }
             }""", JsonObject::class.java)
+        ),
+        Tool(
+            name = "get_location",
+            description = "Get the device's current GPS location with coordinates and reverse-geocoded address",
+            parameters = gson.fromJson("""{
+                "type": "object",
+                "properties": {}
+            }""", JsonObject::class.java)
+        ),
+        Tool(
+            name = "dateTime",
+            description = "Get the device's current local date, time, timezone, and day of week",
+            parameters = gson.fromJson("""{
+                "type": "object",
+                "properties": {}
+            }""", JsonObject::class.java)
         )
     )
 
-    fun getToolsForApi(): List<Map<String, Any>> {
-        return tools.map { tool ->
+    fun getToolsForApi(locationEnabled: Boolean = false): List<Map<String, Any>> {
+        val filtered = if (locationEnabled) tools else tools.filter { it.name != "get_location" }
+        return filtered.map { tool ->
             mapOf(
                 "type" to "function",
                 "function" to mapOf(

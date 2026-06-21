@@ -7,10 +7,16 @@ import android.webkit.CookieManager
 import android.webkit.WebStorage
 import android.webkit.WebView
 import com.aibrowser.agent.StealthInjector
+import com.aibrowser.data.SettingsRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import java.io.File
 import java.util.UUID
 import javax.inject.Inject
@@ -18,7 +24,8 @@ import javax.inject.Singleton
 
 @Singleton
 class TabManager @Inject constructor(
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    private val settingsRepository: SettingsRepository
 ) {
     private val _tabs = mutableListOf<TabState>()
     val tabs: List<TabState> get() = _tabs.toList()
@@ -27,28 +34,33 @@ class TabManager @Inject constructor(
     val activeTabId: StateFlow<String?> = _activeTabId.asStateFlow()
 
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val saveScope = CoroutineScope(Dispatchers.IO)
+    private var saveJob: Job? = null
+
+    private fun createWebView(): WebView = WebView(context).apply {
+        settings.javaScriptEnabled = true
+        settings.domStorageEnabled = true
+        settings.useWideViewPort = true
+        settings.loadWithOverviewMode = true
+        settings.allowFileAccess = true
+        settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+        settings.userAgentString = settings.userAgentString
+            .replace("; wv", "")
+            .replace("Android WebView", "Chrome")
+        CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+        evaluateJavascript(StealthInjector.getInjectionScript(), null)
+    }
 
     fun createTab(url: String = "about:blank"): TabState {
         val id = UUID.randomUUID().toString().take(8)
-        val webView = WebView(context).apply {
-            settings.javaScriptEnabled = true
-            settings.domStorageEnabled = true
-            settings.useWideViewPort = true
-            settings.loadWithOverviewMode = true
-            settings.allowFileAccess = true
-            settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-            settings.userAgentString = settings.userAgentString
-                .replace("; wv", "")
-                .replace("Android WebView", "Chrome")
-            CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
-            evaluateJavascript(StealthInjector.getInjectionScript(), null)
-        }
+        val webView = createWebView()
         val tab = TabState(id = id, url = url, webView = webView)
         _tabs.add(tab)
         _activeTabId.value = id
         if (url != "about:blank") {
             webView.loadUrl(url)
         }
+        scheduleSave()
         return tab
     }
 
@@ -56,9 +68,14 @@ class TabManager @Inject constructor(
         val tab = _tabs.find { it.id == id } ?: return
         tab.webView?.destroy()
         _tabs.removeAll { it.id == id }
+        if (_tabs.isEmpty()) {
+            createTab("about:blank")
+            return
+        }
         if (_activeTabId.value == id) {
             _activeTabId.value = _tabs.lastOrNull()?.id
         }
+        scheduleSave()
     }
 
     fun setActiveTab(id: String) {
@@ -75,6 +92,7 @@ class TabManager @Inject constructor(
         val index = _tabs.indexOfFirst { it.id == id }
         if (index >= 0) {
             _tabs[index] = update(_tabs[index])
+            scheduleSave()
         }
     }
 
@@ -92,6 +110,36 @@ class TabManager @Inject constructor(
 
     fun loadUrl(tabId: String, url: String) {
         getTab(tabId)?.webView?.loadUrl(url)
+    }
+
+    suspend fun restoreTabs(persisted: List<PersistedTab>) {
+        _tabs.clear()
+        for (p in persisted) {
+            val webView = createWebView()
+            val tab = TabState(
+                id = p.id,
+                url = p.url,
+                title = p.title,
+                webView = webView,
+                messages = p.messages,
+                actionHistory = p.actionHistory,
+                isPaused = p.isPaused
+            )
+            _tabs.add(tab)
+            if (p.url != "about:blank") {
+                webView.loadUrl(p.url)
+            }
+        }
+        _activeTabId.value = _tabs.firstOrNull()?.id
+    }
+
+    private fun scheduleSave() {
+        saveJob?.cancel()
+        saveJob = saveScope.launch {
+            delay(500)
+            val snapshot = _tabs.map { it.toPersisted() }
+            settingsRepository.saveTabs(snapshot)
+        }
     }
 
     fun getBrowserDataSize(): Long {

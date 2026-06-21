@@ -55,7 +55,8 @@ class AiService @Inject constructor(
         }
 
         try {
-            val requestBody = buildRequestBody(config, messages)
+            val behavior = settingsRepository.behaviorConfig.first()
+            val requestBody = buildRequestBody(config, messages, behavior.locationEnabled)
             val request = buildRequest(config, requestBody)
 
             executeWithRetry(request).use { response ->
@@ -89,7 +90,7 @@ class AiService @Inject constructor(
         throw lastException ?: IOException("Request failed after 3 retries")
     }
 
-    private fun buildRequestBody(config: ApiConfig, messages: List<Message>): String {
+    private fun buildRequestBody(config: ApiConfig, messages: List<Message>, locationEnabled: Boolean): String {
         val apiMessages = messages.map { msg ->
             val entry = mutableMapOf<String, Any?>(
                 "role" to when (msg.role) {
@@ -124,7 +125,7 @@ class AiService @Inject constructor(
         val body = mutableMapOf<String, Any>(
             "model" to config.model,
             "messages" to apiMessages,
-            "tools" to ToolDefinitions.getToolsForApi(),
+            "tools" to ToolDefinitions.getToolsForApi(locationEnabled),
             "tool_choice" to "auto"
         )
 

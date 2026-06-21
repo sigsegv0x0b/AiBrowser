@@ -17,3 +17,21 @@ data class TabState(
     val actionHistory: List<String> = emptyList(),
     val isPaused: Boolean = false
 )
+
+data class PersistedTab(
+    val id: String,
+    val url: String,
+    val title: String,
+    val messages: List<Message>,
+    val actionHistory: List<String> = emptyList(),
+    val isPaused: Boolean = false
+)
+
+fun TabState.toPersisted(): PersistedTab = PersistedTab(
+    id = id,
+    url = url,
+    title = title,
+    messages = messages,
+    actionHistory = actionHistory,
+    isPaused = isPaused
+)
