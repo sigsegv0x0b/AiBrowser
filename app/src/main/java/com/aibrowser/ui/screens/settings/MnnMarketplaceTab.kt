@@ -39,7 +39,7 @@ fun MnnMarketplaceTab(
 
     data class DownloadState(val progress: Float = 0f, val speedMbS: Float = 0f,
                              val downloadedBytes: Long = 0, val totalBytes: Long = 0,
-                             val modelId: String = "", val modelName: String = "")
+                             val modelId: String = "", val modelName: String = "", val lastUpdateMs: Long = 0L)
 
     var models by remember { mutableStateOf<List<MarketModel>>(emptyList()) }
     var selectedTags by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -184,9 +184,11 @@ fun MnnMarketplaceTab(
                                     modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
                                 )
                                 val dlState = dl ?: DownloadState()
-                                if (speed > 0f) {
-                                    Text("%.1f MB/s  ${formatBytes(dlState.downloadedBytes)} / ${formatBytes(dlState.totalBytes)}"
-                                        .format(speed), style = MaterialTheme.typography.labelSmall)
+                                val dlBytes = dlState.downloadedBytes
+                                val totBytes = dlState.totalBytes
+                                if (dlBytes > 0 && totBytes > 0) {
+                                    Text("${formatBytes(dlBytes)} / ${formatBytes(totBytes)}  ${if (speed > 0f) "%.1f MB/s".format(speed) else ""}",
+                                        style = MaterialTheme.typography.labelSmall)
                                 }
                             }
 
@@ -216,9 +218,15 @@ fun MnnMarketplaceTab(
                                         downloadModel(context, client, settingsRepository,
                                             modelId, model.modelName, model.fileSize,
                                             offsetBytes = persisted!!.downloadedBytes
-                                        ) { p, spd, dlBytes, totBytes ->
+                                        ) { dlBytes, totBytes ->
+                                            val prev = downloadStates[modelId]
+                                            val speed = if (prev != null && prev.downloadedBytes > 0) {
+                                                val elapsed = (System.currentTimeMillis() - prev.lastUpdateMs) / 1000f
+                                                if (elapsed > 0.5f) (dlBytes - prev.downloadedBytes).toFloat() / 1048576f / elapsed else prev.speedMbS
+                                            } else 0f
+                                            val prog = if (totBytes > 0) dlBytes.toFloat() / totBytes.toFloat() else 0f
                                             downloadStates = downloadStates + (modelId to
-                                                DownloadState(p, spd, dlBytes, totBytes, modelId, model.modelName))
+                                                DownloadState(prog, speed, dlBytes, totBytes, modelId, model.modelName, System.currentTimeMillis()))
                                         }
                                     }
                                 }) { Text("Resume") }
@@ -243,9 +251,15 @@ fun MnnMarketplaceTab(
                                     ))
                                     downloadModel(context, client, settingsRepository,
                                         modelId, model.modelName, model.fileSize
-                                    ) { p, spd, dlBytes, totBytes ->
+                                    ) { dlBytes, totBytes ->
+                                        val prev = downloadStates[modelId]
+                                        val speed = if (prev != null && prev.downloadedBytes > 0) {
+                                            val elapsed = (System.currentTimeMillis() - prev.lastUpdateMs) / 1000f
+                                            if (elapsed > 0.5f) (dlBytes - prev.downloadedBytes).toFloat() / 1048576f / elapsed else prev.speedMbS
+                                        } else 0f
+                                        val prog = if (totBytes > 0) dlBytes.toFloat() / totBytes.toFloat() else 0f
                                         downloadStates = downloadStates + (modelId to
-                                            DownloadState(p, spd, dlBytes, totBytes, modelId, model.modelName))
+                                            DownloadState(prog, speed, dlBytes, totBytes, modelId, model.modelName, System.currentTimeMillis()))
                                     }
                                 }
                             }) { Text("Download") }
@@ -270,13 +284,12 @@ private suspend fun downloadModel(
     modelName: String,
     totalBytes: Long,
     offsetBytes: Long = 0,
-    onProgress: (Float, Float, Long, Long) -> Unit
+    onProgress: (totalDownloaded: Long, totalSize: Long) -> Unit
 ) = withContext(Dispatchers.IO) {
-    var totalDownloaded = offsetBytes
-    var totalSize = totalBytes
+    val totalDownloaded = java.util.concurrent.atomic.AtomicLong(offsetBytes)
 
     try {
-        onProgress(0f, 0f, totalDownloaded, totalSize)
+        onProgress(totalDownloaded.get(), totalBytes)
 
         val modelDir = File(context.filesDir, "mnn_models/hf/$modelId")
         modelDir.mkdirs()
@@ -288,7 +301,7 @@ private suspend fun downloadModel(
         val gson = Gson()
         val tree = gson.fromJson(treeJson, Array<HfTreeItem>::class.java) ?: emptyArray()
         val files = tree.filter { it.type == "file" }
-        totalSize = files.sumOf { it.size }
+        val totalSize = files.sumOf { it.size }
 
         for (file in files) {
             val fileUrl = "https://huggingface.co/$modelId/resolve/main/${file.path}"
@@ -296,51 +309,46 @@ private suspend fun downloadModel(
             val incompleteFile = File(modelDir, file.path + ".incomplete")
             targetFile.parentFile?.mkdirs()
 
-            // Skip fully downloaded files
             if (targetFile.exists() && targetFile.length() >= file.size) {
-                totalDownloaded += targetFile.length()
+                totalDownloaded.addAndGet(targetFile.length())
+                onProgress(totalDownloaded.get(), totalSize)
                 continue
             }
 
-            // Resume from incomplete
-            var fileDownloaded = if (incompleteFile.exists()) incompleteFile.length() else 0L
-            if (fileDownloaded >= file.size) {
+            var resumeBytes = if (incompleteFile.exists()) incompleteFile.length() else 0L
+            if (resumeBytes >= file.size) {
                 incompleteFile.renameTo(targetFile)
-                totalDownloaded += targetFile.length()
+                totalDownloaded.addAndGet(targetFile.length())
+                onProgress(totalDownloaded.get(), totalSize)
                 continue
             }
 
-            downloadWithResume(client, fileUrl, incompleteFile, targetFile,
-                file.size, fileDownloaded,
-                modelId, repo, totalDownloaded, totalSize,
-                onProgress
-            ) { d ->
-                totalDownloaded += d
-            }
+            downloadFile(client, fileUrl, incompleteFile, targetFile,
+                file.size, resumeBytes,
+                repo, modelId, totalDownloaded, totalSize, onProgress)
         }
 
         repo.markDownloadComplete(modelId, totalSize)
-        onProgress(1f, 0f, totalSize, totalSize)
+        onProgress(totalSize, totalSize)
     } catch (e: Exception) {
-        repo.updateDownloadProgress(modelId, totalDownloaded)
-        onProgress(0f, 0f, totalDownloaded, totalSize)
+        repo.updateDownloadProgress(modelId, totalDownloaded.get())
+        onProgress(totalDownloaded.get(), totalBytes)
         throw e
     }
 }
 
-private fun downloadWithResume(
+private fun downloadFile(
     client: OkHttpClient,
     url: String,
     incompleteFile: File,
     targetFile: File,
     expectedSize: Long,
     existingBytes: Long,
-    modelId: String,
     repo: SettingsRepository,
-    totalDownloaded: Long,
+    modelId: String,
+    totalDownloaded: java.util.concurrent.atomic.AtomicLong,
     totalSize: Long,
-    onProgress: (Float, Float, Long, Long) -> Unit,
-    onDelta: (Long) -> Unit
+    onProgress: (Long, Long) -> Unit
 ) {
     val maxRetries = 3
     var lastException: Exception? = null
@@ -352,62 +360,53 @@ private fun downloadWithResume(
             if (existingBytes > 0) {
                 req.header("Range", "bytes=$existingBytes-")
             }
-            req.build().let { request ->
-                client.newCall(request).execute().use { resp ->
-                    if (resp.code == 416) {
-                        incompleteFile.renameTo(targetFile)
-                        return
-                    }
-                    if (!resp.isSuccessful && resp.code != 206) {
-                        throw Exception("HTTP ${resp.code}")
-                    }
-
-                    var written = existingBytes
-                    val raf = RandomAccessFile(incompleteFile, "rw").also {
-                        if (existingBytes > 0) it.seek(existingBytes)
-                    }
-
-                    try {
-                        resp.body?.byteStream()?.use { input ->
-                            val buf = ByteArray(65536)
-                            var n: Int
-                            var lastReport = System.currentTimeMillis()
-                            var lastBytes = written
-                            var bytesSinceSave = 0L
-
-                            while (input.read(buf).also { n = it } != -1) {
-                                raf.write(buf, 0, n)
-                                written += n
-                                bytesSinceSave += n
-
-                                val now = System.currentTimeMillis()
-                                val elapsed = now - lastReport
-                                if (elapsed > 200) {
-                                    val dp = (written - lastBytes).toFloat() / 1048576f
-                                    val spd = dp / (elapsed / 1000f)
-                                    val prog = if (totalSize > 0)
-                                        (totalDownloaded + written).toFloat() / totalSize.toFloat()
-                                    else 0f
-                                    onProgress(prog, spd, totalDownloaded + written, totalSize)
-                                    lastReport = now
-                                    lastBytes = written
-                                }
-                                if (bytesSinceSave > 5_000_000) {
-                                    kotlinx.coroutines.runBlocking {
-                                        repo.updateDownloadProgress(modelId, totalDownloaded + written)
-                                    }
-                                    bytesSinceSave = 0
-                                }
-                            }
-                        }
-                    } finally {
-                        raf.close()
-                    }
-
+            client.newCall(req.build()).execute().use { resp ->
+                if (resp.code == 416) {
                     incompleteFile.renameTo(targetFile)
-                    onDelta(written - existingBytes)
+                    totalDownloaded.addAndGet(targetFile.length())
+                    onProgress(totalDownloaded.get(), totalSize)
                     return
                 }
+                if (!resp.isSuccessful && resp.code != 206) {
+                    throw Exception("HTTP ${resp.code}")
+                }
+
+                incompleteFile.parentFile?.mkdirs()
+                val raf = try {
+                    RandomAccessFile(incompleteFile, "rw").also {
+                        if (existingBytes > 0) it.seek(existingBytes)
+                    }
+                } catch (e: Exception) {
+                    throw Exception("Cannot write to ${incompleteFile.name}: ${e.message}", e)
+                }
+
+                try {
+                    resp.body?.byteStream()?.use { input ->
+                        val buf = ByteArray(8192)
+                        var n: Int
+                        var bytesSinceSave = 0L
+
+                        while (input.read(buf).also { n = it } != -1) {
+                            raf.write(buf, 0, n)
+                            totalDownloaded.addAndGet(n.toLong())
+                            bytesSinceSave += n
+
+                            onProgress(totalDownloaded.get(), totalSize)
+
+                            if (bytesSinceSave > 5_000_000) {
+                                kotlinx.coroutines.runBlocking {
+                                    repo.updateDownloadProgress(modelId, totalDownloaded.get())
+                                }
+                                bytesSinceSave = 0
+                            }
+                        }
+                    }
+                } finally {
+                    raf.close()
+                }
+
+                incompleteFile.renameTo(targetFile)
+                return
             }
         } catch (e: Exception) {
             lastException = e

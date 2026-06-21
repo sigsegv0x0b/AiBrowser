@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
 import com.aibrowser.browser.TabManager
 import com.aibrowser.data.SettingsRepository
+import com.google.gson.Gson
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -121,7 +122,9 @@ class ToolExecutor @Inject constructor(
         }
     }
 
-    private suspend fun runJs(js: String): String = withTimeout(10000L) {
+    private val gson = Gson()
+
+    private suspend fun runJs(js: String, timeoutMs: Long = 10000L): String = withTimeout(timeoutMs) {
         suspendCancellableCoroutine { continuation ->
             if (continuation.isCancelled) return@suspendCancellableCoroutine
             val tab = tabManager.getActiveTab()
@@ -133,7 +136,11 @@ class ToolExecutor @Inject constructor(
                 val value = when {
                     result == null -> "Error: JS returned null"
                     result == "null" -> "Error: JS returned null value"
-                    else -> result.removeSurrounding("\"")
+                    result.startsWith("\"") -> {
+                        try { gson.fromJson(result, String::class.java) }
+                        catch (_: Exception) { result.removeSurrounding("\"") }
+                    }
+                    else -> result
                 }
                 if (!continuation.isCompleted) continuation.resume(value)
             } ?: run {
@@ -187,6 +194,15 @@ class ToolExecutor @Inject constructor(
             }
             else -> target
         }
+    }
+
+    private fun isTextSelector(target: String): Boolean {
+        return target.contains(":has-text(")
+    }
+
+    private fun parseTextSelector(target: String): Pair<String, String>? {
+        val match = Regex("""(.+?):has-text\(["'](.+?)["']\)""").matchEntire(target)
+        return match?.let { it.groupValues[1] to it.groupValues[2] }
     }
 
     private fun navigate(url: String): String {
@@ -320,7 +336,11 @@ class ToolExecutor @Inject constructor(
                     if (currentDepth > MAX_DEPTH || truncated) return '';
                     if (child.offsetWidth === 0 && child.offsetHeight === 0) {
                         if (!isInteractive(child)) {
-                            return formatChildren(child, currentDepth);
+                            var hiddenResult = '';
+                            for (var i = 0; i < child.children.length; i++) {
+                                hiddenResult += formatNode(child.children[i], currentDepth);
+                            }
+                            return hiddenResult;
                         }
                     }
                     var role = getAccessibleRole(child);
@@ -328,7 +348,11 @@ class ToolExecutor @Inject constructor(
 
                     var isSemantic = role !== tag || isInteractive(child);
                     if (!isSemantic) {
-                        return formatChildren(child, currentDepth);
+                        var wrapperResult = '';
+                        for (var i = 0; i < child.children.length; i++) {
+                            wrapperResult += formatNode(child.children[i], currentDepth);
+                        }
+                        return wrapperResult;
                     }
 
                     var name = getAccessibleName(child);
@@ -382,7 +406,7 @@ class ToolExecutor @Inject constructor(
                 return 'URL: ' + url + '\\nTitle: ' + title + '\\n\\n' + tree;
             })()
         """.trimIndent()
-        return runJs(js).replace("\\n", "\n")
+        return runJs(js, 30000L).replace("\\n", "\n")
     }
 
     private fun screenshot(fullPage: Boolean?): String {
@@ -390,7 +414,6 @@ class ToolExecutor @Inject constructor(
     }
 
     private suspend fun click(target: String, doubleClick: Boolean?, button: String?, modifiers: List<String>?, scrollIntoView: Boolean = true): String {
-        val sel = resolveSelector(target)
         val clickType = if (doubleClick == true) "dblclick" else "click"
         val btn = when (button) {
             "right" -> 2
@@ -403,6 +426,33 @@ class ToolExecutor @Inject constructor(
         val meta = modifiers?.contains("Meta") == true
         val modProps = "ctrlKey: $ctrl, shiftKey: $shift, altKey: $alt, metaKey: $meta"
         val scrollJs = if (scrollIntoView) "el.scrollIntoView({behavior: 'instant', block: 'center'});" else ""
+
+        if (isTextSelector(target)) {
+            val parts = parseTextSelector(target)
+            if (parts != null) {
+                val (tag, text) = parts
+                val escapedText = text.replace("'", "\\'")
+                val js = """
+                    (function() {
+                        var els = Array.from(document.querySelectorAll('$tag'));
+                        var el = els.find(function(e) { return e.textContent.trim().includes('$escapedText'); });
+                        if (!el) return "Element not found: $target";
+                        $scrollJs
+                        el.dispatchEvent(new MouseEvent('$clickType', {
+                            bubbles: true,
+                            cancelable: true,
+                            button: $btn,
+                            $modProps
+                        }));
+                        el.focus();
+                        return 'Clicked ' + el.tagName;
+                    })()
+                """.trimIndent()
+                return runJs(js)
+            }
+        }
+
+        val sel = resolveSelector(target)
         val js = """
             (function() {
                 var el = document.querySelector("$sel");
@@ -422,13 +472,28 @@ class ToolExecutor @Inject constructor(
     }
 
     private suspend fun type(target: String, text: String, submit: Boolean?, slowly: Boolean?, scrollIntoView: Boolean = true): String {
-        val sel = resolveSelector(target)
         val escaped = text.replace("'", "\\'").replace("\n", "\\n")
         val scrollJs = if (scrollIntoView) "el.scrollIntoView({behavior: 'instant', block: 'center'});" else ""
+
+        val findElJs = if (isTextSelector(target)) {
+            val parts = parseTextSelector(target)
+            if (parts != null) {
+                val (tag, textSel) = parts
+                val escText = textSel.replace("'", "\\'")
+                "var els = Array.from(document.querySelectorAll('$tag')); var el = els.find(function(e) { return e.textContent.trim().includes('$escText'); });"
+            } else {
+                val sel = resolveSelector(target)
+                "var el = document.querySelector('$sel');"
+            }
+        } else {
+            val sel = resolveSelector(target)
+            "var el = document.querySelector('$sel');"
+        }
+
         if (slowly == true) {
             val js = """
                 (function() {
-                    var el = document.querySelector('$sel');
+                    $findElJs
                     if (!el) return 'Element not found: $target';
                     $scrollJs
                     el.focus();
@@ -447,7 +512,7 @@ class ToolExecutor @Inject constructor(
         // fill (default)
         val js = """
             (function() {
-                var el = document.querySelector("$sel");
+                $findElJs
                 if (!el) return "Element not found: $target";
                 $scrollJs
                 el.focus();

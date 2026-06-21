@@ -31,7 +31,13 @@ private fun describeToolCall(name: String, args: Map<String, Any>): String {
         "browser_evaluate" -> "Run JS: ${(args["function"] as? String)?.take(80)}"
         "browser_wait_for" -> "Wait for \"${args["text"]}\""
         "browser_tabs" -> "Tab action: ${args["action"]}${args["url"]?.let { " → $it" } ?: ""}"
-        else -> "$name(${args.entries.joinToString { "${it.key}=${it.value}" }})"
+        "file_write" -> {
+            val content = (args["content"] as? String) ?: ""
+            "Write ${content.length} chars to ${args["path"]}"
+        }
+        "file_read" -> "Read ${args["path"]}"
+        "file_list" -> "List ${args["path"] ?: "/"}"
+        else -> "$name(${args.entries.filter { it.key != "content" }.joinToString { "${it.key}=${it.value}" }})"
     }
 }
 
@@ -96,8 +102,14 @@ fun ToolCallCard(
 
         if (expanded) {
             Spacer(modifier = Modifier.height(4.dp))
+            val argsDisplay = toolCall.arguments.entries.joinToString { (k, v) ->
+                if (k == "content") {
+                    val s = v.toString()
+                    "content=${if (s.length > 200) s.take(200) + "…(${s.length} chars)" else s}"
+                } else "$k=$v"
+            }
             Text(
-                text = "Arguments: ${toolCall.arguments}",
+                text = "Arguments: $argsDisplay",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

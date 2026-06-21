@@ -17,6 +17,7 @@ import com.aibrowser.agent.AgentViewModel
 import com.aibrowser.agent.AiService
 import com.aibrowser.agent.MnnLlmProvider
 import com.aibrowser.browser.BrowserViewModel
+import com.aibrowser.browser.TabManager
 import com.aibrowser.data.SettingsRepository
 import com.aibrowser.ui.navigation.NavGraph
 import com.aibrowser.ui.theme.AiBrowserTheme
@@ -34,6 +35,9 @@ class MainActivity : ComponentActivity() {
 
     @Inject
     lateinit var mnnLlmProvider: MnnLlmProvider
+
+    @Inject
+    lateinit var tabManager: TabManager
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -62,7 +66,8 @@ class MainActivity : ComponentActivity() {
                         agentViewModel = agentViewModel,
                         settingsRepository = settingsRepository,
                         aiService = aiService,
-                        mnnLlmProvider = mnnLlmProvider
+                        mnnLlmProvider = mnnLlmProvider,
+                        tabManager = tabManager
                     )
                 }
             }

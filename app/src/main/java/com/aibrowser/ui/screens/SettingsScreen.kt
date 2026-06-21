@@ -10,9 +10,11 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.unit.dp
 import com.aibrowser.agent.AiService
 import com.aibrowser.agent.MnnLlmProvider
+import com.aibrowser.browser.TabManager
 import com.aibrowser.data.SettingsRepository
 import com.aibrowser.data.models.ApiConfig
 import com.aibrowser.data.models.BehaviorConfig
+import com.aibrowser.data.models.CloudProvider
 import com.aibrowser.ui.screens.settings.BehaviorSettingsTab
 import com.aibrowser.ui.screens.settings.CloudLlmTab
 import com.aibrowser.ui.screens.settings.MnnMarketplaceTab
@@ -25,14 +27,24 @@ fun SettingsScreen(
     settingsRepository: SettingsRepository,
     aiService: AiService,
     mnnLlmProvider: MnnLlmProvider? = null,
+    tabManager: TabManager? = null,
     onBack: () -> Unit
 ) {
     val config by settingsRepository.apiConfig.collectAsState(initial = ApiConfig())
+    val cloudProviders by settingsRepository.cloudProviders.collectAsState(initial = emptyList<CloudProvider>())
+    val activeProviderId by settingsRepository.activeProviderId.collectAsState(initial = null)
     val behavior by settingsRepository.behaviorConfig.collectAsState(initial = BehaviorConfig())
     val notesDirectoryUri by settingsRepository.notesDirectoryUri.collectAsState(initial = null)
     val mnnModelPath by settingsRepository.mnnModelPath.collectAsState(initial = "")
     val mnnBackend by settingsRepository.mnnBackend.collectAsState(initial = "cpu")
     val mnnUseMmap by settingsRepository.mnnUseMmap.collectAsState(initial = false)
+    val mnnPromptCache by settingsRepository.mnnPromptCache.collectAsState(initial = true)
+    val mnnMaxTokens by settingsRepository.mnnMaxTokens.collectAsState(initial = 2048)
+    val mnnTemperature by settingsRepository.mnnTemperature.collectAsState(initial = 0.7f)
+    val mnnTopP by settingsRepository.mnnTopP.collectAsState(initial = 0.95f)
+    val mnnTopK by settingsRepository.mnnTopK.collectAsState(initial = 20)
+    val mnnPrecision by settingsRepository.mnnPrecision.collectAsState(initial = "low")
+    val mnnThreads by settingsRepository.mnnThreads.collectAsState(initial = 4)
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
 
@@ -69,6 +81,8 @@ fun SettingsScreen(
             when (selectedTab) {
                 0 -> CloudLlmTab(
                     config = config,
+                    cloudProviders = cloudProviders,
+                    activeProviderId = activeProviderId,
                     aiService = aiService,
                     settingsRepository = settingsRepository,
                     scope = scope,
@@ -78,6 +92,13 @@ fun SettingsScreen(
                     modelPath = mnnModelPath,
                     backend = mnnBackend,
                     useMmap = mnnUseMmap,
+                    promptCache = mnnPromptCache,
+                    maxTokens = mnnMaxTokens,
+                    temperature = mnnTemperature,
+                    topP = mnnTopP,
+                    topK = mnnTopK,
+                    precision = mnnPrecision,
+                    threads = mnnThreads,
                     settingsRepository = settingsRepository,
                     scope = scope,
                     mnnLlmProvider = mnnLlmProvider
@@ -91,6 +112,7 @@ fun SettingsScreen(
                     notesDirectoryUri = notesDirectoryUri,
                     settingsRepository = settingsRepository,
                     scope = scope,
+                    tabManager = tabManager,
                     onSave = { scope.launch { settingsRepository.saveBehaviorConfig(it) } }
                 )
             }

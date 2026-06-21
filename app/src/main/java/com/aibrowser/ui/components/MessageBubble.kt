@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
@@ -36,7 +37,8 @@ import java.util.Locale
 @Composable
 fun MessageBubble(
     message: Message,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onGenerateTts: ((String, (String) -> Unit) -> Unit)? = null
 ) {
     val isUser = message.role == Message.Role.USER
     val isTool = message.role == Message.Role.TOOL
@@ -133,7 +135,7 @@ fun MessageBubble(
                 horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                TtsSpeaker(text = if (isUser) message.content else stripMarkdown(message.content))
+                TtsSpeaker(text = if (isUser) message.content else stripMarkdown(message.content), onGenerateTts = onGenerateTts)
             }
         }
 
@@ -160,23 +162,29 @@ private fun stripMarkdown(text: String): String {
 }
 
 private enum class TtsState { IDLE, PLAYING, PAUSED }
+private enum class TtsMode { RAW, SUMMARIZED }
 private const val CHARS_PER_SEC = 15
 private const val SKIP_SEC = 10
 
 @Composable
-private fun TtsSpeaker(text: String) {
+private fun TtsSpeaker(text: String, onGenerateTts: ((String, (String) -> Unit) -> Unit)? = null) {
     val context = LocalContext.current
     var tts by remember { mutableStateOf<android.speech.tts.TextToSpeech?>(null) }
     var ready by remember { mutableStateOf(false) }
     var state by remember { mutableStateOf(TtsState.IDLE) }
+    var mode by remember { mutableStateOf(TtsMode.RAW) }
     var speakFrom by remember { mutableStateOf(0) }
     var startTime by remember { mutableStateOf(0L) }
     var startFrom by remember { mutableStateOf(0) }
+    var generating by remember { mutableStateOf(false) }
+    var summarizedText by remember { mutableStateOf<String?>(null) }
+
+    fun activeText(): String = if (mode == TtsMode.SUMMARIZED) summarizedText ?: text else text
 
     fun calcPosition(): Int {
         if (startTime == 0L) return speakFrom
         val elapsed = ((System.currentTimeMillis() - startTime) / 1000).toInt()
-        return (startFrom + elapsed * CHARS_PER_SEC).coerceAtMost(text.length)
+        return (startFrom + elapsed * CHARS_PER_SEC).coerceAtMost(activeText().length)
     }
 
     fun stopTts(ttsInstance: android.speech.tts.TextToSpeech?) {
@@ -186,16 +194,41 @@ private fun TtsSpeaker(text: String) {
     }
 
     fun playTts(ttsInstance: android.speech.tts.TextToSpeech?, from: Int) {
-        if (from >= text.length) {
+        val currentText = activeText()
+        if (from >= currentText.length) {
             state = TtsState.IDLE
             speakFrom = 0
             return
         }
-        val sub = text.substring(from)
+        val sub = currentText.substring(from)
         startFrom = from
         startTime = System.currentTimeMillis()
         ttsInstance?.speak(sub, android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "utt")
         state = TtsState.PLAYING
+    }
+
+    fun startRaw() {
+        if (!ready) return
+        mode = TtsMode.RAW
+        speakFrom = 0
+        playTts(tts, 0)
+    }
+
+    fun startSummarized() {
+        if (!ready || onGenerateTts == null) return
+        mode = TtsMode.SUMMARIZED
+        if (summarizedText != null) {
+            speakFrom = 0
+            playTts(tts, 0)
+        } else {
+            generating = true
+            onGenerateTts(text) { result ->
+                summarizedText = result
+                generating = false
+                speakFrom = 0
+                playTts(tts, 0)
+            }
+        }
     }
 
     DisposableEffect(context) {
@@ -226,9 +259,14 @@ private fun TtsSpeaker(text: String) {
         horizontalArrangement = Arrangement.spacedBy(0.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        if (state == TtsState.IDLE) {
+        if (generating) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(20.dp).padding(top = 4.dp),
+                strokeWidth = 2.dp
+            )
+        } else if (state == TtsState.IDLE) {
             IconButton(
-                onClick = { if (ready) playTts(tts, 0) },
+                onClick = { startRaw() },
                 modifier = Modifier.size(28.dp)
             ) {
                 Icon(
@@ -237,6 +275,19 @@ private fun TtsSpeaker(text: String) {
                     modifier = Modifier.size(20.dp),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            }
+            if (onGenerateTts != null) {
+                IconButton(
+                    onClick = { startSummarized() },
+                    modifier = Modifier.size(28.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.AutoAwesome,
+                        contentDescription = "Summarize and read aloud",
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
             }
         } else {
             IconButton(onClick = { stopTts(tts); playTts(tts, 0) }, modifier = Modifier.size(28.dp)) {
@@ -264,7 +315,7 @@ private fun TtsSpeaker(text: String) {
             }
             IconButton(onClick = {
                 stopTts(tts)
-                playTts(tts, (speakFrom + SKIP_SEC * CHARS_PER_SEC).coerceAtMost(text.length))
+                playTts(tts, (speakFrom + SKIP_SEC * CHARS_PER_SEC).coerceAtMost(activeText().length))
             }, modifier = Modifier.size(28.dp)) {
                 Icon(Icons.Default.SkipNext, "+10s", Modifier.size(18.dp), MaterialTheme.colorScheme.onSurfaceVariant)
             }

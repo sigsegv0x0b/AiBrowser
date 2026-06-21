@@ -8,6 +8,7 @@ import com.aibrowser.agent.AgentViewModel
 import com.aibrowser.agent.AiService
 import com.aibrowser.agent.MnnLlmProvider
 import com.aibrowser.browser.BrowserViewModel
+import com.aibrowser.browser.TabManager
 import com.aibrowser.data.SettingsRepository
 import com.aibrowser.ui.screens.AgentScreen
 import com.aibrowser.ui.screens.BrowserScreen
@@ -26,7 +27,8 @@ fun NavGraph(
     agentViewModel: AgentViewModel,
     settingsRepository: SettingsRepository,
     aiService: AiService,
-    mnnLlmProvider: MnnLlmProvider? = null
+    mnnLlmProvider: MnnLlmProvider? = null,
+    tabManager: TabManager? = null
 ) {
     NavHost(navController = navController, startDestination = Routes.BROWSER) {
         composable(Routes.BROWSER) {
@@ -49,6 +51,7 @@ fun NavGraph(
                 settingsRepository = settingsRepository,
                 aiService = aiService,
                 mnnLlmProvider = mnnLlmProvider,
+                tabManager = tabManager,
                 onBack = { navController.popBackStack() }
             )
         }

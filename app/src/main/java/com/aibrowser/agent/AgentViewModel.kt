@@ -2,27 +2,37 @@ package com.aibrowser.agent
 
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import androidx.core.content.ContextCompat
+import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.aibrowser.browser.TabManager
 import com.aibrowser.data.SettingsRepository
 import com.aibrowser.data.models.BehaviorConfig
 import com.aibrowser.data.models.ApiConfig
+import com.aibrowser.data.models.CloudProvider
 import com.aibrowser.data.models.Message
 import com.aibrowser.data.models.ToolCall
 import com.aibrowser.service.AgentForegroundService
 import com.google.gson.Gson
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
+import com.google.gson.reflect.TypeToken
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.UUID
 import javax.inject.Inject
 
@@ -52,6 +62,12 @@ class AgentViewModel @Inject constructor(
 
     private val _providerName = MutableStateFlow("")
     val providerName: StateFlow<String> = _providerName.asStateFlow()
+
+    private val _cloudProviders = MutableStateFlow<List<CloudProvider>>(emptyList())
+    val cloudProviders: StateFlow<List<CloudProvider>> = _cloudProviders.asStateFlow()
+
+    private val _activeProviderId = MutableStateFlow<String?>(null)
+    val activeProviderId: StateFlow<String?> = _activeProviderId.asStateFlow()
 
     private val gson = Gson()
 
@@ -132,8 +148,21 @@ class AgentViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
-            settingsRepository.apiConfig.collect { cfg ->
-                _providerName.value = cfg.provider.displayName
+            combine(
+                settingsRepository.apiConfig,
+                settingsRepository.cloudProviders,
+                settingsRepository.activeProviderId
+            ) { cfg, providers, activeId ->
+                Triple(cfg, providers, activeId)
+            }.collect { (cfg, providers, activeId) ->
+                _cloudProviders.value = providers
+                _activeProviderId.value = activeId
+                _providerName.value = if (cfg.provider == ApiConfig.ApiProvider.LOCAL_MNN) {
+                    "MNN Local"
+                } else {
+                    val cp = providers.find { it.id == activeId }
+                    cp?.name?.ifBlank { cfg.provider.displayName } ?: cfg.provider.displayName
+                }
             }
         }
     }
@@ -311,6 +340,7 @@ class AgentViewModel @Inject constructor(
         tabSetCurrentAction(tabId, "")
         val paused = tabManager.getTab(tabId)?.isPaused ?: false
         if (toolCalls.isNotEmpty() && !paused) {
+            aiService.keepAlive()
             sendFollowUp(tabId)
         } else if (toolCalls.isNotEmpty()) {
             tabSetLoading(tabId, false)
@@ -383,9 +413,9 @@ class AgentViewModel @Inject constructor(
         tabSetPaused(tabId, true)
     }
 
-    fun setProvider(provider: ApiConfig.ApiProvider) {
+    fun setActiveProvider(providerId: String?) {
         viewModelScope.launch {
-            settingsRepository.setProvider(provider)
+            settingsRepository.setActiveProvider(providerId)
         }
     }
 
@@ -403,7 +433,7 @@ class AgentViewModel @Inject constructor(
             content = content
         )
         tabAppendMessage(tabId, userMessage)
-        viewModelScope.launch { sendFollowUp(tabId) }
+        viewModelScope.launch { aiService.keepAlive(); sendFollowUp(tabId) }
     }
 
     fun clearChat() {
@@ -503,5 +533,117 @@ class AgentViewModel @Inject constructor(
             }
         }
         return result.toString().ifBlank { text }
+    }
+
+    suspend fun exportChat(): String = withContext(Dispatchers.IO) {
+        val tabId = currentTabId ?: throw Exception("No active tab")
+        val tab = tabManager.getTab(tabId) ?: throw Exception("Tab not found")
+        val messages = tab.messages
+        if (messages.isEmpty()) throw Exception("No messages to export")
+
+        val root = resolveNotesRoot()
+            ?: throw Exception("Notes directory not configured — set it in Settings > Behavior")
+
+        val modelPath = settingsRepository.mnnModelPath.first()
+        val config = mutableMapOf<String, Any?>()
+        config["modelPath"] = modelPath
+        config["backend"] = settingsRepository.mnnBackend.first()
+        config["settings"] = mapOf(
+            "useMmap" to settingsRepository.mnnUseMmap.first(),
+            "promptCache" to settingsRepository.mnnPromptCache.first(),
+            "temperature" to settingsRepository.mnnTemperature.first(),
+            "topP" to settingsRepository.mnnTopP.first(),
+            "topK" to settingsRepository.mnnTopK.first(),
+            "precision" to settingsRepository.mnnPrecision.first(),
+            "threads" to settingsRepository.mnnThreads.first()
+        )
+        config["exportTimestamp"] = System.currentTimeMillis()
+        try {
+            val mc = File(modelPath, "config.json")
+            if (mc.exists()) config["modelConfig"] = gson.fromJson(mc.readText(), Map::class.java)
+            val lc = File(modelPath, "llm_config.json")
+            if (lc.exists()) {
+                val llmObj = gson.fromJson(lc.readText(), Map::class.java) as? Map<*, *>
+                config["llmConfig"] = llmObj
+                config["modelType"] = llmObj?.get("model_type")
+            }
+        } catch (_: Exception) {}
+
+        val json = gson.toJson(mapOf("messages" to messages, "config" to config))
+        val ts = SimpleDateFormat("yyyyMMddHHmmss", Locale.US).format(Date())
+        val filename = "msglog_$ts.json"
+
+        val file = root.createFile("application/json", filename)
+            ?: throw Exception("Failed to create file in notes directory")
+        context.contentResolver.openOutputStream(file.uri)?.use { out ->
+            out.write(json.toByteArray())
+        } ?: throw Exception("Failed to write file")
+
+        filename
+    }
+
+    suspend fun listMsglogFiles(): List<String> = withContext(Dispatchers.IO) {
+        val root = resolveNotesRoot() ?: return@withContext emptyList()
+        root.listFiles()
+            .filter { it.name?.startsWith("msglog_") == true && it.name?.endsWith(".json") == true }
+            .mapNotNull { it.name }
+            .sortedDescending()
+    }
+
+    suspend fun importChat(filename: String): List<Message> = withContext(Dispatchers.IO) {
+        val root = resolveNotesRoot()
+            ?: throw Exception("Notes directory not configured")
+
+        val file = root.listFiles().find { it.name == filename }
+            ?: throw Exception("File not found: $filename")
+
+        val json = context.contentResolver.openInputStream(file.uri)?.bufferedReader()?.readText()
+            ?: throw Exception("Failed to read file")
+
+        val obj = gson.fromJson(json, Map::class.java) as? Map<*, *>
+            ?: throw Exception("Invalid format: expected JSON object")
+
+        val msgsJson = gson.toJson(obj["messages"])
+        val type = object : TypeToken<List<Message>>() {}.type
+        val messages: List<Message> = gson.fromJson(msgsJson, type)
+
+        val config = obj["config"] as? Map<*, *>
+        if (config != null) restoreConfig(config)
+
+        val tabId = currentTabId ?: throw Exception("No active tab")
+        tabManager.updateTab(tabId) { it.copy(
+            messages = messages,
+            agentIsLoading = false,
+            currentAction = "",
+            actionHistory = emptyList(),
+            isPaused = false
+        )}
+        _messages.value = messages
+        _isLoading.value = false
+        _currentAction.value = ""
+        _actionHistory.value = emptyList()
+        _isPaused.value = false
+
+        messages
+    }
+
+    private suspend fun restoreConfig(config: Map<*, *>) {
+        val s = config["settings"] as? Map<*, *>
+        s?.get("promptCache")?.let { if (it is Boolean) settingsRepository.saveMnnPromptCache(it) }
+        s?.get("temperature")?.let { if (it is Number) settingsRepository.saveMnnTemperature(it.toFloat()) }
+        s?.get("topP")?.let { if (it is Number) settingsRepository.saveMnnTopP(it.toFloat()) }
+        s?.get("topK")?.let { if (it is Number) settingsRepository.saveMnnTopK(it.toInt()) }
+        s?.get("precision")?.let { if (it is String) settingsRepository.saveMnnPrecision(it) }
+        s?.get("threads")?.let { if (it is Number) settingsRepository.saveMnnThreads(it.toInt()) }
+        s?.get("useMmap")?.let { if (it is Boolean) settingsRepository.saveMnnUseMmap(it) }
+        config["modelPath"]?.let { if (it is String) settingsRepository.saveMnnModelPath(it) }
+        config["backend"]?.let { if (it is String) settingsRepository.saveMnnBackend(it) }
+    }
+
+    private suspend fun resolveNotesRoot(): DocumentFile? {
+        val uriStr = settingsRepository.notesDirectoryUri.first()
+        if (uriStr.isNullOrBlank()) return null
+        val uri = Uri.parse(uriStr)
+        return DocumentFile.fromTreeUri(context, uri)
     }
 }

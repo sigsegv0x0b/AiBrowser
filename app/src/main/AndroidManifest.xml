@@ -13,12 +13,14 @@
 
     <application
         android:name=".AiBrowserApp"
+        android:memtagMode="async"
         android:allowBackup="true"
         android:label="AI Browser"
         android:supportsRtl="true"
         android:usesCleartextTraffic="true"
         android:largeHeap="true"
-        android:hardwareAccelerated="true">
+        android:hardwareAccelerated="true"
+        android:theme="@style/Theme.AiBrowser">
         <uses-native-library android:name="libvndksupport.so" android:required="false" />
         <uses-native-library android:name="libOpenCL.so" android:required="false" />
         <activity

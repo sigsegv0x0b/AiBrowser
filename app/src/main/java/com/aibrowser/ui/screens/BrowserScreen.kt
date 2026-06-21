@@ -1,25 +1,15 @@
 package com.aibrowser.ui.screens
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.Chat
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Summarize
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.unit.dp
 import com.aibrowser.agent.AgentViewModel
 import com.aibrowser.browser.BrowserViewModel
@@ -45,8 +35,6 @@ fun BrowserScreen(
     val actionHistory by agentViewModel.actionHistory.collectAsState()
     val messages by agentViewModel.messages.collectAsState()
     val behavior by settingsRepository.behaviorConfig.collectAsState(initial = com.aibrowser.data.models.BehaviorConfig())
-    var addressBarExpanded by remember { mutableStateOf(true) }
-    var urlInput by remember(activeTab?.url) { mutableStateOf(activeTab?.url ?: "") }
     var voiceModeActive by remember { mutableStateOf(false) }
 
     val responseText = remember(isLoading, messages) {
@@ -70,7 +58,11 @@ fun BrowserScreen(
                 onTabClick = { browserViewModel.setActiveTab(it) },
                 onCloseTab = { browserViewModel.closeTab(it) },
                 onNewTab = { browserViewModel.createTab() },
-                onSettingsClick = onNavigateToSettings
+                onSettingsClick = onNavigateToSettings,
+                onNavigate = { browserViewModel.navigateToUrl(it) },
+                onBack = { browserViewModel.goBack() },
+                onForward = { browserViewModel.goForward() },
+                onReload = { browserViewModel.reloadCurrent() }
             )
         },
         floatingActionButton = {
@@ -79,9 +71,24 @@ fun BrowserScreen(
                 horizontalAlignment = Alignment.End
             ) {
                 FloatingActionButton(
+                    onClick = {
+                        agentViewModel.sendMessage("Summarize the current page concisely.")
+                        onNavigateToAgent()
+                    },
+                    containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                    modifier = Modifier.alpha(if (isLoading) 0.25f else 0.5f)
+                ) {
+                    Icon(
+                        Icons.Default.Summarize,
+                        contentDescription = "Summarize page",
+                        tint = MaterialTheme.colorScheme.onTertiaryContainer
+                    )
+                }
+                FloatingActionButton(
                     onClick = { voiceModeActive = !voiceModeActive },
                     containerColor = if (voiceModeActive) MaterialTheme.colorScheme.secondaryContainer
-                                     else MaterialTheme.colorScheme.surfaceVariant
+                                     else MaterialTheme.colorScheme.surfaceVariant,
+                    modifier = Modifier.alpha(if (voiceModeActive) 1f else 0.5f)
                 ) {
                     Icon(
                         Icons.Default.Mic,
@@ -92,7 +99,8 @@ fun BrowserScreen(
                 }
                 FloatingActionButton(
                     onClick = onNavigateToAgent,
-                    containerColor = MaterialTheme.colorScheme.primary
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.alpha(0.5f)
                 ) {
                     Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = "Agent")
                 }
@@ -104,72 +112,6 @@ fun BrowserScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 4.dp, vertical = 2.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(
-                    onClick = { addressBarExpanded = !addressBarExpanded },
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Icon(
-                        imageVector = if (addressBarExpanded) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowUp,
-                        contentDescription = if (addressBarExpanded) "Collapse address bar" else "Expand address bar",
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-                Spacer(Modifier.width(4.dp))
-                IconButton(
-                    onClick = { browserViewModel.goBack() },
-                    enabled = activeTab?.canGoBack == true,
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", Modifier.size(20.dp))
-                }
-                IconButton(
-                    onClick = { browserViewModel.goForward() },
-                    enabled = activeTab?.canGoForward == true,
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowForward, "Forward", Modifier.size(20.dp))
-                }
-                IconButton(
-                    onClick = { browserViewModel.reloadCurrent() },
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Icon(Icons.Default.Refresh, "Refresh", Modifier.size(20.dp))
-                }
-            }
-
-            AnimatedVisibility(
-                visible = addressBarExpanded,
-                enter = expandVertically(),
-                exit = shrinkVertically()
-            ) {
-                OutlinedTextField(
-                    value = urlInput,
-                    onValueChange = { urlInput = it },
-                    singleLine = true,
-                    placeholder = { Text("Enter URL") },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 2.dp)
-                        .heightIn(min = 40.dp),
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = KeyboardType.Uri,
-                        imeAction = ImeAction.Go
-                    ),
-                    keyboardActions = KeyboardActions(
-                        onGo = {
-                            browserViewModel.navigateToUrl(urlInput)
-                        }
-                    ),
-                    textStyle = MaterialTheme.typography.bodySmall
-                )
-            }
-
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 activeTab?.let { tab ->
                     WebViewContainer(
@@ -182,7 +124,6 @@ fun BrowserScreen(
                             browserViewModel.updateTab(tab.id) { it.copy(title = title) }
                         },
                         onUrlChanged = { url ->
-                            if (tab.id == browserViewModel.activeTabId.value) urlInput = url
                             browserViewModel.updateTab(tab.id) { it.copy(url = url) }
                         },
                         onLoadingChanged = { loading ->

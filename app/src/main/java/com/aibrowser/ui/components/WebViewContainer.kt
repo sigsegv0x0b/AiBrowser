@@ -3,6 +3,7 @@ package com.aibrowser.ui.components
 import android.annotation.SuppressLint
 import android.graphics.Bitmap
 import android.view.ViewGroup
+import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
@@ -34,6 +35,8 @@ fun WebViewContainer(
                 )
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
+                settings.useWideViewPort = true
+                settings.loadWithOverviewMode = true
                 settings.allowFileAccess = true
                 settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
             }
@@ -44,6 +47,10 @@ fun WebViewContainer(
                 if (tabWebView.parent != wrapperView) {
                     tabWebView.parent?.let { (it as ViewGroup).removeView(tabWebView) }
                     wrapperView.removeAllViews()
+                    tabWebView.layoutParams = ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT
+                    )
                     wrapperView.addView(tabWebView)
                 }
 
@@ -59,6 +66,7 @@ fun WebViewContainer(
                         onUrlChanged(url ?: "")
                         onLoadingChanged(false)
                         view?.let { onNavigationStateChanged(it.canGoBack(), it.canGoForward()) }
+                        CookieManager.getInstance().flush()
                         StealthInjector.inject(tabWebView)
                     }
 

@@ -11,10 +11,12 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import com.aibrowser.agent.mnn.market.DownloadedMnnModel
 import com.aibrowser.data.models.ApiConfig
 import com.aibrowser.data.models.BehaviorConfig
+import com.aibrowser.data.models.CloudProvider
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -40,25 +42,120 @@ class SettingsRepository @Inject constructor(
         private val KEY_MNN_MODEL_PATH = stringPreferencesKey("mnn_model_path")
         private val KEY_MNN_BACKEND = stringPreferencesKey("mnn_backend")
         private val KEY_MNN_USE_MMAP = booleanPreferencesKey("mnn_use_mmap")
+        private val KEY_MNN_PROMPT_CACHE = booleanPreferencesKey("mnn_prompt_cache")
+        private val KEY_MNN_MAX_TOKENS = intPreferencesKey("mnn_max_tokens")
+        private val KEY_MNN_TEMPERATURE = stringPreferencesKey("mnn_temperature")
+        private val KEY_MNN_TOP_P = stringPreferencesKey("mnn_top_p")
+        private val KEY_MNN_TOP_K = intPreferencesKey("mnn_top_k")
+        private val KEY_MNN_PRECISION = stringPreferencesKey("mnn_precision")
+        private val KEY_MNN_THREADS = intPreferencesKey("mnn_threads")
         private val KEY_MNN_DOWNLOADS = stringPreferencesKey("mnn_downloads")
+        private val KEY_CLOUD_PROVIDERS = stringPreferencesKey("cloud_providers")
+        private val KEY_ACTIVE_PROVIDER_ID = stringPreferencesKey("active_provider_id")
+        private val KEY_CLOUD_MIGRATED = booleanPreferencesKey("cloud_migrated")
         private val gson = Gson()
     }
 
-    val apiConfig: Flow<ApiConfig> = context.dataStore.data.map { prefs ->
-        val providerName = prefs[KEY_PROVIDER] ?: ApiConfig.ApiProvider.OPENAI.name
-        val provider = try {
-            ApiConfig.ApiProvider.valueOf(providerName)
+    val cloudProviders: Flow<List<CloudProvider>> = context.dataStore.data.map { prefs ->
+        val json = prefs[KEY_CLOUD_PROVIDERS] ?: "[]"
+        try {
+            gson.fromJson(json, object : TypeToken<List<CloudProvider>>() {}.type)
         } catch (_: Exception) {
-            ApiConfig.ApiProvider.OPENAI
+            emptyList()
         }
-        ApiConfig(
-            provider = provider,
-            apiKey = prefs[KEY_API_KEY] ?: "",
-            model = prefs[KEY_MODEL] ?: provider.defaultModel,
-            baseUrl = prefs[KEY_BASE_URL] ?: provider.defaultBaseUrl,
-            contextSize = prefs[KEY_CONTEXT_SIZE] ?: 0,
-            maxOutputTokens = prefs[KEY_MAX_OUTPUT] ?: 0
-        )
+    }
+
+    val activeProviderId: Flow<String?> = context.dataStore.data.map { prefs ->
+        prefs[KEY_ACTIVE_PROVIDER_ID]
+    }
+
+    val apiConfig: Flow<ApiConfig> = combine(cloudProviders, activeProviderId) { providers, activeId ->
+        if (activeId == null) {
+            ApiConfig(provider = ApiConfig.ApiProvider.LOCAL_MNN)
+        } else {
+            val cp = providers.find { it.id == activeId }
+            if (cp != null) {
+                ApiConfig(
+                    provider = cp.provider,
+                    apiKey = cp.apiKey,
+                    model = cp.model,
+                    baseUrl = cp.baseUrl,
+                    contextSize = cp.contextSize,
+                    maxOutputTokens = cp.maxOutputTokens
+                )
+            } else {
+                ApiConfig(provider = ApiConfig.ApiProvider.LOCAL_MNN)
+            }
+        }
+    }
+
+    suspend fun saveCloudProvider(provider: CloudProvider) {
+        context.dataStore.edit { prefs ->
+            val json = prefs[KEY_CLOUD_PROVIDERS] ?: "[]"
+            val list: MutableList<CloudProvider> = try {
+                gson.fromJson(json, object : TypeToken<List<CloudProvider>>() {}.type)
+            } catch (_: Exception) {
+                mutableListOf()
+            }
+            val existing = list.indexOfFirst { it.id == provider.id }
+            if (existing >= 0) list[existing] = provider else list.add(provider)
+            prefs[KEY_CLOUD_PROVIDERS] = gson.toJson(list)
+        }
+    }
+
+    suspend fun deleteCloudProvider(id: String) {
+        context.dataStore.edit { prefs ->
+            val json = prefs[KEY_CLOUD_PROVIDERS] ?: "[]"
+            val list: MutableList<CloudProvider> = try {
+                gson.fromJson(json, object : TypeToken<List<CloudProvider>>() {}.type)
+            } catch (_: Exception) {
+                mutableListOf()
+            }
+            list.removeAll { it.id == id }
+            prefs[KEY_CLOUD_PROVIDERS] = gson.toJson(list)
+            if (prefs[KEY_ACTIVE_PROVIDER_ID] == id) {
+                prefs.remove(KEY_ACTIVE_PROVIDER_ID)
+            }
+        }
+    }
+
+    suspend fun setActiveProvider(id: String?) {
+        context.dataStore.edit { prefs ->
+            if (id != null) prefs[KEY_ACTIVE_PROVIDER_ID] = id
+            else prefs.remove(KEY_ACTIVE_PROVIDER_ID)
+        }
+    }
+
+    suspend fun migrateCloudProvidersIfNeeded() {
+        context.dataStore.edit { prefs ->
+            if (prefs[KEY_CLOUD_MIGRATED] == true) return@edit
+            prefs[KEY_CLOUD_MIGRATED] = true
+            val providerName = prefs[KEY_PROVIDER] ?: ApiConfig.ApiProvider.OPENAI.name
+            val provider = try {
+                ApiConfig.ApiProvider.valueOf(providerName)
+            } catch (_: Exception) {
+                ApiConfig.ApiProvider.OPENAI
+            }
+            if (provider == ApiConfig.ApiProvider.LOCAL_MNN) return@edit
+            val apiKey = prefs[KEY_API_KEY] ?: ""
+            if (apiKey.isBlank()) return@edit
+            val model = prefs[KEY_MODEL] ?: provider.defaultModel
+            val baseUrl = prefs[KEY_BASE_URL] ?: provider.defaultBaseUrl
+            val contextSize = prefs[KEY_CONTEXT_SIZE] ?: 0
+            val maxOutput = prefs[KEY_MAX_OUTPUT] ?: 0
+            val cp = CloudProvider(
+                id = java.util.UUID.randomUUID().toString(),
+                name = provider.displayName,
+                provider = provider,
+                apiKey = apiKey,
+                model = model,
+                baseUrl = baseUrl,
+                contextSize = contextSize,
+                maxOutputTokens = maxOutput
+            )
+            prefs[KEY_CLOUD_PROVIDERS] = gson.toJson(listOf(cp))
+            prefs[KEY_ACTIVE_PROVIDER_ID] = cp.id
+        }
     }
 
     suspend fun saveApiConfig(config: ApiConfig) {
@@ -125,6 +222,76 @@ class SettingsRepository @Inject constructor(
     suspend fun saveMnnUseMmap(enable: Boolean) {
         context.dataStore.edit { prefs ->
             prefs[KEY_MNN_USE_MMAP] = enable
+        }
+    }
+
+    val mnnPromptCache: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[KEY_MNN_PROMPT_CACHE] ?: true
+    }
+
+    suspend fun saveMnnPromptCache(enable: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_MNN_PROMPT_CACHE] = enable
+        }
+    }
+
+    val mnnMaxTokens: Flow<Int> = context.dataStore.data.map { prefs ->
+        prefs[KEY_MNN_MAX_TOKENS] ?: 2048
+    }
+
+    suspend fun saveMnnMaxTokens(tokens: Int) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_MNN_MAX_TOKENS] = tokens
+        }
+    }
+
+    val mnnTemperature: Flow<Float> = context.dataStore.data.map { prefs ->
+        prefs[KEY_MNN_TEMPERATURE]?.toFloatOrNull() ?: 0.7f
+    }
+
+    suspend fun saveMnnTemperature(temp: Float) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_MNN_TEMPERATURE] = temp.toString()
+        }
+    }
+
+    val mnnTopP: Flow<Float> = context.dataStore.data.map { prefs ->
+        prefs[KEY_MNN_TOP_P]?.toFloatOrNull() ?: 0.95f
+    }
+
+    suspend fun saveMnnTopP(value: Float) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_MNN_TOP_P] = value.toString()
+        }
+    }
+
+    val mnnTopK: Flow<Int> = context.dataStore.data.map { prefs ->
+        prefs[KEY_MNN_TOP_K] ?: 20
+    }
+
+    suspend fun saveMnnTopK(value: Int) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_MNN_TOP_K] = value
+        }
+    }
+
+    val mnnPrecision: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[KEY_MNN_PRECISION] ?: "low"
+    }
+
+    suspend fun saveMnnPrecision(value: String) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_MNN_PRECISION] = value
+        }
+    }
+
+    val mnnThreads: Flow<Int> = context.dataStore.data.map { prefs ->
+        prefs[KEY_MNN_THREADS] ?: 4
+    }
+
+    suspend fun saveMnnThreads(count: Int) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_MNN_THREADS] = count
         }
     }
 

@@ -19,13 +19,17 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import javax.inject.Inject
 import javax.inject.Singleton
 
-@Singleton
+    @Singleton
 class AiService @Inject constructor(
     private val client: OkHttpClient,
     private val settingsRepository: SettingsRepository,
     private val mnnLlmProvider: MnnLlmProvider
 ) {
     private val gson = Gson()
+
+    fun keepAlive() {
+        mnnLlmProvider.keepAlive()
+    }
 
     sealed class StreamEvent {
         data class Token(val text: String) : StreamEvent()
@@ -202,20 +206,43 @@ class AiService @Inject constructor(
     }
 
     suspend fun listModels(config: ApiConfig): List<ModelInfo> = withContext(Dispatchers.IO) {
-        if (config.provider == ApiConfig.ApiProvider.CLAUDE) return@withContext emptyList()
+        val isClaude = config.provider == ApiConfig.ApiProvider.CLAUDE
 
-        try {
-            val url = "${config.baseUrl}/models"
-            val request = Request.Builder()
-                .url(url)
-                .addHeader("Authorization", "Bearer ${config.apiKey}")
-                .build()
+        val endpoints = if (isClaude) {
+            listOf(
+                "${config.baseUrl}/v1/models" to "x-api-key",
+                "${config.baseUrl}/models" to "bearer",
+                "${config.baseUrl.substringBeforeLast("/")}/models" to "bearer"
+            )
+        } else {
+            listOf(
+                "${config.baseUrl}/models" to "bearer",
+                "${config.baseUrl}/v1/models" to "bearer"
+            )
+        }
 
-            client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) return@withContext emptyList()
-                val body = response.body?.string() ?: return@withContext emptyList()
+        for ((url, authType) in endpoints) {
+            val result = tryFetchModels(url, config.apiKey, authType)
+            if (result != null) return@withContext result
+        }
+        emptyList()
+    }
+
+    private fun tryFetchModels(url: String, apiKey: String, authType: String): List<ModelInfo>? {
+        return try {
+            val requestBuilder = Request.Builder().url(url)
+            if (authType == "x-api-key") {
+                requestBuilder.addHeader("x-api-key", apiKey)
+                requestBuilder.addHeader("anthropic-version", "2023-06-01")
+            } else {
+                requestBuilder.addHeader("Authorization", "Bearer $apiKey")
+            }
+
+            client.newCall(requestBuilder.build()).execute().use { response ->
+                if (!response.isSuccessful) return null
+                val body = response.body?.string() ?: return null
                 val json = JsonParser.parseString(body).asJsonObject
-                val data = json.getAsJsonArray("data") ?: return@withContext emptyList()
+                val data = json.getAsJsonArray("data") ?: return null
                 data.map { modelObj ->
                     val obj = modelObj.asJsonObject
                     ModelInfo(
@@ -231,7 +258,7 @@ class AiService @Inject constructor(
                 }.sortedBy { it.id }
             }
         } catch (_: Exception) {
-            emptyList()
+            null
         }
     }
 
