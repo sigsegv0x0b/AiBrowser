@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import java.net.URLEncoder
 import javax.inject.Inject
 
 @HiltViewModel
@@ -83,11 +84,40 @@ class BrowserViewModel @Inject constructor(
 
     fun navigateToUrl(url: String) {
         val id = _activeTabId.value ?: return
-        var finalUrl = url.trim()
-        if (!finalUrl.startsWith("http://") && !finalUrl.startsWith("https://")) {
-            finalUrl = "https://$finalUrl"
-        }
+        val finalUrl = classifyNavigation(url)
+        if (finalUrl == "about:blank") return
         tabManager.loadUrl(id, finalUrl)
         refresh()
+    }
+
+    private fun classifyNavigation(input: String): String {
+        val trimmed = input.trim()
+        if (trimmed.isEmpty()) return "about:blank"
+        if (trimmed.startsWith("http://") || trimmed.startsWith("https://") ||
+            trimmed.startsWith("file://") || trimmed.startsWith("about:") ||
+            trimmed.startsWith("data:") || trimmed.startsWith("javascript:")) {
+            return trimmed
+        }
+        if (trimmed.startsWith("localhost") || IPV4_PATTERN.matches(trimmed)) {
+            return "https://$trimmed"
+        }
+        if (trimmed.any { it.isWhitespace() }) {
+            return googleSearchUrl(trimmed)
+        }
+        if (!trimmed.contains('.')) {
+            return googleSearchUrl(trimmed)
+        }
+        return "https://$trimmed"
+    }
+
+    private fun googleSearchUrl(query: String): String {
+        val encoded = URLEncoder.encode(query, "UTF-8")
+        return "https://www.google.com/search?q=$encoded"
+    }
+
+    companion object {
+        private val IPV4_PATTERN = Regex(
+            "^(\\d{1,3}\\.){3}\\d{1,3}(:\\d+)?(/.*)?$"
+        )
     }
 }

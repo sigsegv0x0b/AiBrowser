@@ -4,6 +4,8 @@ data class BehaviorConfig(
     val scrollIntoView: Boolean = true,
     val blockExternalIntents: Boolean = true,
     val locationEnabled: Boolean = false,
+    val humanTyping: Boolean = true,
+    val humanMouse: Boolean = true,
     val ttsPrompt: String = DEFAULT_TTS_PROMPT,
     val systemPrompt: String = DEFAULT_SYSTEM_PROMPT
 ) {

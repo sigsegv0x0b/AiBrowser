@@ -41,6 +41,8 @@ fun BehaviorSettingsTab(
     var scrollIntoView by remember(behavior) { mutableStateOf(behavior.scrollIntoView) }
     var blockExternalIntents by remember(behavior) { mutableStateOf(behavior.blockExternalIntents) }
     var locationEnabled by remember(behavior) { mutableStateOf(behavior.locationEnabled) }
+    var humanTyping by remember(behavior) { mutableStateOf(behavior.humanTyping) }
+    var humanMouse by remember(behavior) { mutableStateOf(behavior.humanMouse) }
     var ttsPrompt by remember(behavior) { mutableStateOf(behavior.ttsPrompt) }
     var systemPrompt by remember(behavior) { mutableStateOf(behavior.systemPrompt) }
 
@@ -89,6 +91,8 @@ fun BehaviorSettingsTab(
                         scrollIntoView = scrollIntoView,
                         blockExternalIntents = blockExternalIntents,
                         locationEnabled = true,
+                        humanTyping = humanTyping,
+                        humanMouse = humanMouse,
                         ttsPrompt = ttsPrompt,
                         systemPrompt = systemPrompt
                     )
@@ -151,15 +155,17 @@ fun BehaviorSettingsTab(
                             if (granted) {
                                 locationEnabled = true
                                 scope.launch {
-                                    settingsRepository.saveBehaviorConfig(
-                                        BehaviorConfig(
-                                            scrollIntoView = scrollIntoView,
-                                            blockExternalIntents = blockExternalIntents,
-                                            locationEnabled = true,
-                                            ttsPrompt = ttsPrompt,
-                                            systemPrompt = systemPrompt
-                                        )
+                                settingsRepository.saveBehaviorConfig(
+                                    BehaviorConfig(
+                                        scrollIntoView = scrollIntoView,
+                                        blockExternalIntents = blockExternalIntents,
+                                        locationEnabled = true,
+                                        humanTyping = humanTyping,
+                                        humanMouse = humanMouse,
+                                        ttsPrompt = ttsPrompt,
+                                        systemPrompt = systemPrompt
                                     )
+                                )
                                 }
                             } else {
                                 locationEnabled = true
@@ -168,19 +174,43 @@ fun BehaviorSettingsTab(
                         } else {
                             locationEnabled = false
                             scope.launch {
-                                settingsRepository.saveBehaviorConfig(
-                                    BehaviorConfig(
-                                        scrollIntoView = scrollIntoView,
-                                        blockExternalIntents = blockExternalIntents,
-                                        locationEnabled = false,
-                                        ttsPrompt = ttsPrompt,
-                                        systemPrompt = systemPrompt
-                                    )
+                            settingsRepository.saveBehaviorConfig(
+                                BehaviorConfig(
+                                    scrollIntoView = scrollIntoView,
+                                    blockExternalIntents = blockExternalIntents,
+                                    locationEnabled = false,
+                                    humanTyping = humanTyping,
+                                    humanMouse = humanMouse,
+                                    ttsPrompt = ttsPrompt,
+                                    systemPrompt = systemPrompt
                                 )
+                            )
                             }
                         }
                     }
                 )
+            }
+
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Human-like typing", style = MaterialTheme.typography.bodyLarge)
+                    Spacer(Modifier.height(4.dp))
+                    Text("Types character by character with QWERTY-distance delays, punctuation pauses, and natural variance.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Spacer(Modifier.width(16.dp))
+                Switch(checked = humanTyping, onCheckedChange = { humanTyping = it })
+            }
+
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Human-like mouse movement", style = MaterialTheme.typography.bodyLarge)
+                    Spacer(Modifier.height(4.dp))
+                    Text("Moves along Bézier curves with micro-jitter, overshoot correction, and natural click timing.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Spacer(Modifier.width(16.dp))
+                Switch(checked = humanMouse, onCheckedChange = { humanMouse = it })
             }
 
             HorizontalDivider()
@@ -267,6 +297,8 @@ fun BehaviorSettingsTab(
                         scrollIntoView = scrollIntoView,
                         blockExternalIntents = blockExternalIntents,
                         locationEnabled = locationEnabled,
+                        humanTyping = humanTyping,
+                        humanMouse = humanMouse,
                         ttsPrompt = ttsPrompt,
                         systemPrompt = systemPrompt
                     ))

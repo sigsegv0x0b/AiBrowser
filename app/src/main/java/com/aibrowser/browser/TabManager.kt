@@ -3,6 +3,7 @@ package com.aibrowser.browser
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.view.View
 import android.webkit.CookieManager
 import android.webkit.WebStorage
 import android.webkit.WebView
@@ -47,6 +48,9 @@ class TabManager @Inject constructor(
         settings.userAgentString = settings.userAgentString
             .replace("; wv", "")
             .replace("Android WebView", "Chrome")
+        isFocusable = true
+        isFocusableInTouchMode = true
+        setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_YES)
         CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
         evaluateJavascript(StealthInjector.getInjectionScript(), null)
     }

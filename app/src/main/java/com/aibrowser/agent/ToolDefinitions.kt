@@ -279,6 +279,19 @@ object ToolDefinitions {
                 "type": "object",
                 "properties": {}
             }""", JsonObject::class.java)
+        ),
+        Tool(
+            name = "save_image",
+            description = "Download an image from a page element or URL and save it to the notes directory. Use 'target' with an element ref from the snapshot (e.g. e123) pointing to an img element, or use 'url' for a direct image URL.",
+            parameters = gson.fromJson("""{
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "description": "Element ref or selector of the img element to save"},
+                    "url": {"type": "string", "description": "Direct image URL to download"},
+                    "filename": {"type": "string", "description": "Destination filename (auto-detected if not specified)"},
+                    "path": {"type": "string", "description": "Subdirectory within notes directory (default: root)"}
+                }
+            }""", JsonObject::class.java)
         )
     )
 

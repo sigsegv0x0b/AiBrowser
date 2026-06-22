@@ -104,6 +104,7 @@ class AgentViewModel @Inject constructor(
                 "file_list" -> "Listing directory"
                 "get_location" -> "Getting location"
                 "dateTime" -> "Getting date and time"
+                "save_image" -> "Saving image"
                 else -> "Executing $name"
             }
         }

@@ -38,6 +38,8 @@ class SettingsRepository @Inject constructor(
         private val KEY_SCROLL_INTO_VIEW = booleanPreferencesKey("scroll_into_view")
         private val KEY_BLOCK_EXTERNAL_INTENTS = booleanPreferencesKey("block_external_intents")
         private val KEY_LOCATION_ENABLED = booleanPreferencesKey("location_enabled")
+        private val KEY_HUMAN_TYPING = booleanPreferencesKey("human_typing")
+        private val KEY_HUMAN_MOUSE = booleanPreferencesKey("human_mouse")
         private val KEY_TTS_PROMPT = stringPreferencesKey("tts_prompt")
         private val KEY_SYSTEM_PROMPT = stringPreferencesKey("system_prompt")
         private val KEY_NOTES_DIRECTORY_URI = stringPreferencesKey("notes_directory_uri")
@@ -185,6 +187,8 @@ class SettingsRepository @Inject constructor(
             scrollIntoView = prefs[KEY_SCROLL_INTO_VIEW] ?: true,
             blockExternalIntents = prefs[KEY_BLOCK_EXTERNAL_INTENTS] ?: true,
             locationEnabled = prefs[KEY_LOCATION_ENABLED] ?: false,
+            humanTyping = prefs[KEY_HUMAN_TYPING] ?: true,
+            humanMouse = prefs[KEY_HUMAN_MOUSE] ?: true,
             ttsPrompt = prefs[KEY_TTS_PROMPT] ?: BehaviorConfig.DEFAULT_TTS_PROMPT,
             systemPrompt = prefs[KEY_SYSTEM_PROMPT] ?: BehaviorConfig.DEFAULT_SYSTEM_PROMPT
         )
@@ -195,6 +199,8 @@ class SettingsRepository @Inject constructor(
             prefs[KEY_SCROLL_INTO_VIEW] = config.scrollIntoView
             prefs[KEY_BLOCK_EXTERNAL_INTENTS] = config.blockExternalIntents
             prefs[KEY_LOCATION_ENABLED] = config.locationEnabled
+            prefs[KEY_HUMAN_TYPING] = config.humanTyping
+            prefs[KEY_HUMAN_MOUSE] = config.humanMouse
             prefs[KEY_TTS_PROMPT] = config.ttsPrompt
             prefs[KEY_SYSTEM_PROMPT] = config.systemPrompt
         }

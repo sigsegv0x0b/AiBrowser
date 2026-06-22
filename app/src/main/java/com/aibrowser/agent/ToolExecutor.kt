@@ -7,11 +7,13 @@ import android.location.Location
 import android.location.LocationManager
 import android.net.Uri
 import android.os.Looper
+import android.webkit.WebView
 import androidx.core.content.ContextCompat
 import androidx.documentfile.provider.DocumentFile
 import com.aibrowser.browser.TabManager
 import com.aibrowser.data.SettingsRepository
 import com.google.gson.Gson
+import com.google.gson.JsonParser
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -19,6 +21,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.text.SimpleDateFormat
@@ -36,11 +40,14 @@ import javax.inject.Singleton
 class ToolExecutor @Inject constructor(
     private val tabManager: TabManager,
     private val settingsRepository: SettingsRepository,
+    private val client: OkHttpClient,
     @ApplicationContext private val context: Context
 ) {
     suspend fun execute(toolName: String, arguments: Map<String, Any>): String {
         val config = settingsRepository.behaviorConfig.first()
         val scrollIntoView = config.scrollIntoView
+        val humanTyping = config.humanTyping
+        val humanMouse = config.humanMouse
         return withContext(Dispatchers.Main) {
             when (toolName) {
                 "browser_navigate" -> navigate(arguments["url"] as String)
@@ -58,14 +65,16 @@ class ToolExecutor @Inject constructor(
                     doubleClick = arguments["doubleClick"] as? Boolean,
                     button = arguments["button"] as? String,
                     modifiers = arguments["modifiers"] as? List<String>,
-                    scrollIntoView = scrollIntoView
+                    scrollIntoView = scrollIntoView,
+                    humanMouse = humanMouse
                 )
                 "browser_type" -> type(
                     target = arguments["target"] as String,
                     text = arguments["text"] as String,
                     submit = arguments["submit"] as? Boolean,
                     slowly = arguments["slowly"] as? Boolean,
-                    scrollIntoView = scrollIntoView
+                    scrollIntoView = scrollIntoView,
+                    humanTyping = humanTyping
                 )
                 "browser_fill_form" -> fillForm(
                     fields = parseFillFormFields(arguments["fields"]),
@@ -78,7 +87,8 @@ class ToolExecutor @Inject constructor(
                 )
                 "browser_hover" -> hover(
                     target = arguments["target"] as String,
-                    scrollIntoView = scrollIntoView
+                    scrollIntoView = scrollIntoView,
+                    humanMouse = humanMouse
                 )
                 "browser_press_key" -> pressKey(arguments["key"] as String)
                 "browser_evaluate" -> evaluate(
@@ -99,7 +109,8 @@ class ToolExecutor @Inject constructor(
                 "browser_drag" -> drag(
                     startTarget = arguments["startTarget"] as String,
                     endTarget = arguments["endTarget"] as String,
-                    scrollIntoView = scrollIntoView
+                    scrollIntoView = scrollIntoView,
+                    humanMouse = humanMouse
                 )
                 "browser_handle_dialog" -> handleDialog(
                     accept = arguments["accept"] as? Boolean ?: true,
@@ -129,6 +140,12 @@ class ToolExecutor @Inject constructor(
                 )
                 "get_location" -> getLocation()
                 "dateTime" -> getDateTime()
+                "save_image" -> saveImage(
+                    target = arguments["target"] as? String,
+                    url = arguments["url"] as? String,
+                    filename = arguments["filename"] as? String,
+                    path = arguments["path"] as? String
+                )
                 else -> "Unknown tool: $toolName"
             }
         }
@@ -215,6 +232,216 @@ class ToolExecutor @Inject constructor(
     private fun parseTextSelector(target: String): Pair<String, String>? {
         val match = Regex("""(.+?):has-text\(["'](.+?)["']\)""").matchEntire(target)
         return match?.let { it.groupValues[1] to it.groupValues[2] }
+    }
+
+    private fun activeWebView(): WebView? = tabManager.getActiveTab()?.webView
+
+    private fun selectorLookupJs(target: String): String {
+        return if (isTextSelector(target)) {
+            val parts = parseTextSelector(target)
+            if (parts != null) {
+                val (tag, text) = parts
+                val escapedText = text.replace("'", "\\'")
+                "var els = Array.from(document.querySelectorAll('$tag')); var el = els.find(function(e) { return e.textContent.trim().includes('$escapedText'); });"
+            } else {
+                "var el = document.querySelector('${resolveSelector(target)}');"
+            }
+        } else {
+            "var el = document.querySelector('${resolveSelector(target)}');"
+        }
+    }
+
+    private suspend fun elementCenter(target: String, scrollIntoView: Boolean): Pair<Double, Double>? {
+        val scrollJs = if (scrollIntoView) "el.scrollIntoView({behavior:'instant', block:'center'});" else ""
+        val lookup = selectorLookupJs(target)
+        val js = """
+            (function() {
+                $lookup
+                if (!el) return JSON.stringify({found:false});
+                $scrollJs
+                var r = el.getBoundingClientRect();
+                return JSON.stringify({found:true, x:r.left+r.width/2, y:r.top+r.height/2});
+            })()
+        """.trimIndent()
+        return try {
+            val result = runJs(js)
+            val obj = JsonParser.parseString(result).asJsonObject
+            if (obj.get("found")?.asBoolean != true) return null
+            val x = obj.get("x")?.asDouble
+            val y = obj.get("y")?.asDouble
+            if (x == null || y == null) null else x to y
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private suspend fun humanMouseMove(endX: Double, endY: Double, delayMultiplier: Double = 1.0) {
+        val webView = activeWebView() ?: return
+        val start = HumanEmulation.getCursorPosition(webView)
+        val fromX = start?.first ?: 0.0
+        val fromY = start?.second ?: 0.0
+        val path = HumanEmulation.generateBezierPath(fromX, fromY, endX, endY)
+        for (pt in path) {
+            val moveJs = """
+                (function() {
+                    var x = ${pt.x};
+                    var y = ${pt.y};
+                    var target = document.elementFromPoint(x, y) || document.body;
+                    var opts = {bubbles:true, cancelable:true, clientX:x, clientY:y, screenX:x, screenY:y};
+                    var evt = new MouseEvent('mousemove', opts);
+                    document.dispatchEvent(evt);
+                    if (target && target.dispatchEvent) target.dispatchEvent(evt);
+                    return 'moved';
+                })()
+            """.trimIndent()
+            runJs(moveJs, 5000L)
+            val d = (pt.delayMs * delayMultiplier).toLong().coerceAtLeast(1L)
+            if (d > 0) delay(d)
+        }
+        HumanEmulation.setCursorPosition(webView, endX, endY)
+    }
+
+    private suspend fun humanMouseClick(
+        endX: Double,
+        endY: Double,
+        button: String?,
+        doubleClick: Boolean?,
+        modifiers: List<String>? = null
+    ) {
+        humanMouseMove(endX, endY)
+        val webView = activeWebView() ?: return
+        val btn = when (button) {
+            "right" -> 2
+            "middle" -> 1
+            else -> 0
+        }
+        val buttonsDown = btn + 1
+        val ctrl = modifiers?.contains("Control") == true || modifiers?.contains("ControlOrMeta") == true
+        val shift = modifiers?.contains("Shift") == true
+        val alt = modifiers?.contains("Alt") == true
+        val meta = modifiers?.contains("Meta") == true || modifiers?.contains("ControlOrMeta") == true
+        val modProps = "ctrlKey:$ctrl, shiftKey:$shift, altKey:$alt, metaKey:$meta"
+        delay(HumanEmulation.clickDwellMs())
+        val downJs = """
+            (function() {
+                var x = $endX; var y = $endY;
+                var target = document.elementFromPoint(x, y) || document.body;
+                var opts = {bubbles:true, cancelable:true, clientX:x, clientY:y, screenX:x, screenY:y, button:$btn, buttons:$buttonsDown, $modProps};
+                target.dispatchEvent(new MouseEvent('mousedown', opts));
+                return 'down';
+            })()
+        """.trimIndent()
+        runJs(downJs, 5000L)
+        delay(HumanEmulation.clickHoldMs())
+        val upJs = """
+            (function() {
+                var x = $endX; var y = $endY;
+                var target = document.elementFromPoint(x, y) || document.body;
+                var opts = {bubbles:true, cancelable:true, clientX:x, clientY:y, screenX:x, screenY:y, button:$btn, buttons:0, $modProps};
+                target.dispatchEvent(new MouseEvent('mouseup', opts));
+                target.dispatchEvent(new MouseEvent('click', opts));
+                return 'up';
+            })()
+        """.trimIndent()
+        runJs(upJs, 5000L)
+        HumanEmulation.setCursorPosition(webView, endX, endY)
+        if (doubleClick == true) {
+            delay(HumanEmulation.doubleClickBetweenMs())
+            runJs(downJs, 5000L)
+            delay(HumanEmulation.clickHoldMs())
+            val dblJs = """
+                (function() {
+                    var x = $endX; var y = $endY;
+                    var target = document.elementFromPoint(x, y) || document.body;
+                    var opts = {bubbles:true, cancelable:true, clientX:x, clientY:y, screenX:x, screenY:y, button:$btn, buttons:0, $modProps};
+                    target.dispatchEvent(new MouseEvent('mouseup', opts));
+                    target.dispatchEvent(new MouseEvent('click', opts));
+                    target.dispatchEvent(new MouseEvent('dblclick', opts));
+                    return 'dblclick';
+                })()
+            """.trimIndent()
+            runJs(dblJs, 5000L)
+        }
+    }
+
+    private fun jsCharLiteral(raw: String): String {
+        return raw.replace("\\", "\\\\")
+            .replace("'", "\\'")
+            .replace("\n", "\\n")
+            .replace("\r", "\\r")
+            .replace("\t", "\\t")
+    }
+
+    private suspend fun humanType(target: String, text: String, submit: Boolean?) {
+        val lookup = selectorLookupJs(target)
+        val focusJs = """
+            (function() {
+                $lookup
+                if (!el) return 'not found';
+                el.focus();
+                return 'focused';
+            })()
+        """.trimIndent()
+        if (runJs(focusJs).contains("not found")) {
+            throw IllegalStateException("Element not found: $target")
+        }
+        val delays = HumanEmulation.computeHumanDelays(text)
+        for (i in text.indices) {
+            val raw = text[i].toString()
+            val ch = jsCharLiteral(raw)
+            val code = when {
+                raw == " " -> "Space"
+                raw.length == 1 && raw[0].isLetter() -> "Key${raw.uppercase()}"
+                raw.length == 1 && raw[0].isDigit() -> "Digit${raw}"
+                else -> ""
+            }
+            val codeProp = if (code.isNotBlank()) "code:'$code'," else ""
+            val typeJs = """
+                (function() {
+                    $lookup
+                    if (!el) return 'not found';
+                    var ch = '$ch';
+                    var before = el.value || '';
+                    el.value = before + ch;
+                    var kd = new KeyboardEvent('keydown', {key:ch, ${codeProp}keyCode:ch.charCodeAt(0), charCode:ch.charCodeAt(0), bubbles:true, cancelable:true});
+                    el.dispatchEvent(kd);
+                    var kp = new KeyboardEvent('keypress', {key:ch, ${codeProp}keyCode:ch.charCodeAt(0), charCode:ch.charCodeAt(0), bubbles:true, cancelable:true});
+                    el.dispatchEvent(kp);
+                    var ie = new InputEvent('input', {bubbles:true, inputType:'insertText', data:ch});
+                    el.dispatchEvent(ie);
+                    var ku = new KeyboardEvent('keyup', {key:ch, ${codeProp}keyCode:ch.charCodeAt(0), charCode:ch.charCodeAt(0), bubbles:true, cancelable:true});
+                    el.dispatchEvent(ku);
+                    return 'typed';
+                })()
+            """.trimIndent()
+            runJs(typeJs, 5000L)
+            if (i < delays.size) delay(delays[i])
+        }
+        val finishJs = """
+            (function() {
+                $lookup
+                if (!el) return 'not found';
+                ${if (submit == true) "el.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', code:'Enter', keyCode:13, bubbles:true})); el.dispatchEvent(new KeyboardEvent('keyup', {key:'Enter', code:'Enter', keyCode:13, bubbles:true}));" else ""}
+                el.dispatchEvent(new Event('change', {bubbles:true}));
+                return 'done';
+            })()
+        """.trimIndent()
+        runJs(finishJs, 5000L)
+    }
+
+    private suspend fun humanHover(endX: Double, endY: Double) {
+        humanMouseMove(endX, endY)
+        val js = """
+            (function() {
+                var x = $endX; var y = $endY;
+                var target = document.elementFromPoint(x, y) || document.body;
+                var opts = {bubbles:true, cancelable:true, clientX:x, clientY:y, screenX:x, screenY:y};
+                target.dispatchEvent(new MouseEvent('mouseenter', opts));
+                target.dispatchEvent(new MouseEvent('mouseover', opts));
+                return 'hovered';
+            })()
+        """.trimIndent()
+        runJs(js, 5000L)
     }
 
     private fun navigate(url: String): String {
@@ -425,7 +652,23 @@ class ToolExecutor @Inject constructor(
         return "Screenshots require native Android WebView capture. Use browser_snapshot instead."
     }
 
-    private suspend fun click(target: String, doubleClick: Boolean?, button: String?, modifiers: List<String>?, scrollIntoView: Boolean = true): String {
+    private suspend fun click(
+        target: String,
+        doubleClick: Boolean?,
+        button: String?,
+        modifiers: List<String>?,
+        scrollIntoView: Boolean = true,
+        humanMouse: Boolean = true
+    ): String {
+        if (humanMouse) {
+            val center = elementCenter(target, scrollIntoView)
+            if (center != null) {
+                val (x, y) = center
+                humanMouseClick(x, y, button, doubleClick, modifiers)
+                return "Clicked${if (doubleClick == true) " double" else ""} at (${x.toInt()}, ${y.toInt()})"
+            }
+        }
+
         val clickType = if (doubleClick == true) "dblclick" else "click"
         val btn = when (button) {
             "right" -> 2
@@ -483,7 +726,23 @@ class ToolExecutor @Inject constructor(
         return runJs(js)
     }
 
-    private suspend fun type(target: String, text: String, submit: Boolean?, slowly: Boolean?, scrollIntoView: Boolean = true): String {
+    private suspend fun type(
+        target: String,
+        text: String,
+        submit: Boolean?,
+        slowly: Boolean?,
+        scrollIntoView: Boolean = true,
+        humanTyping: Boolean = true
+    ): String {
+        if (humanTyping || slowly == true) {
+            return try {
+                humanType(target, text, submit)
+                "Typed ${text.length} chars${if (submit == true) " and submitted" else ""}"
+            } catch (e: Exception) {
+                "Human type failed: ${e.message}"
+            }
+        }
+
         val escaped = text.replace("'", "\\'").replace("\n", "\\n")
         val scrollJs = if (scrollIntoView) "el.scrollIntoView({behavior: 'instant', block: 'center'});" else ""
 
@@ -502,25 +761,6 @@ class ToolExecutor @Inject constructor(
             "var el = document.querySelector('$sel');"
         }
 
-        if (slowly == true) {
-            val js = """
-                (function() {
-                    $findElJs
-                    if (!el) return 'Element not found: $target';
-                    $scrollJs
-                    el.focus();
-                    el.value = '';
-                    for (var i = 0; i < '$escaped'.length; i++) {
-                        el.value += '$escaped'[i];
-                        el.dispatchEvent(new Event('input', { bubbles: true }));
-                    }
-                    el.dispatchEvent(new Event('change', { bubbles: true }));
-                    ${if (submit == true) "el.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', keyCode:13, bubbles:true}));" else ""}
-                    return 'Typed into ' + el.tagName;
-                })()
-            """.trimIndent()
-            return runJs(js)
-        }
         // fill (default)
         val js = """
             (function() {
@@ -584,7 +824,16 @@ class ToolExecutor @Inject constructor(
         return runJs(js)
     }
 
-    private suspend fun hover(target: String, scrollIntoView: Boolean = true): String {
+    private suspend fun hover(target: String, scrollIntoView: Boolean = true, humanMouse: Boolean = true): String {
+        if (humanMouse) {
+            val center = elementCenter(target, scrollIntoView)
+            if (center != null) {
+                val (x, y) = center
+                humanHover(x, y)
+                return "Hovered at (${x.toInt()}, ${y.toInt()})"
+            }
+        }
+
         val sel = resolveSelector(target)
         val scrollJs = if (scrollIntoView) "el.scrollIntoView({behavior: 'instant', block: 'center'});" else ""
         val js = """
@@ -613,15 +862,23 @@ class ToolExecutor @Inject constructor(
             "arrowdown" -> 40
             else -> key.firstOrNull()?.code ?: 0
         }
-        val js = """
+        val jsDown = """
             (function() {
                 var el = document.activeElement || document.body;
                 el.dispatchEvent(new KeyboardEvent('keydown', {key:'$key', keyCode:$keyCode, bubbles:true}));
+                return 'keydown';
+            })()
+        """.trimIndent()
+        val jsUp = """
+            (function() {
+                var el = document.activeElement || document.body;
                 el.dispatchEvent(new KeyboardEvent('keyup', {key:'$key', keyCode:$keyCode, bubbles:true}));
                 return 'Pressed $key';
             })()
         """.trimIndent()
-        return runJs(js)
+        runJs(jsDown)
+        delay(HumanEmulation.clickHoldMs())
+        return runJs(jsUp)
     }
 
     private suspend fun evaluate(function: String, target: String?, scrollIntoView: Boolean = true): String {
@@ -656,7 +913,43 @@ class ToolExecutor @Inject constructor(
         return runJs(js)
     }
 
-    private suspend fun drag(startTarget: String, endTarget: String, scrollIntoView: Boolean = true): String {
+    private suspend fun drag(
+        startTarget: String,
+        endTarget: String,
+        scrollIntoView: Boolean = true,
+        humanMouse: Boolean = true
+    ): String {
+        if (humanMouse) {
+            val startCenter = elementCenter(startTarget, scrollIntoView)
+            val endCenter = elementCenter(endTarget, false)
+            if (startCenter != null && endCenter != null) {
+                val (sx, sy) = startCenter
+                val (ex, ey) = endCenter
+                humanMouseMove(sx, sy)
+                val webView = activeWebView() ?: return "No active tab"
+                HumanEmulation.setCursorPosition(webView, sx, sy)
+                val downJs = """
+                    (function() {
+                        var target = document.elementFromPoint($sx, $sy) || document.body;
+                        target.dispatchEvent(new MouseEvent('mousedown', {bubbles:true, cancelable:true, clientX:$sx, clientY:$sy, button:0, buttons:1}));
+                        return 'down';
+                    })()
+                """.trimIndent()
+                runJs(downJs, 5000L)
+                humanMouseMove(ex, ey, delayMultiplier = 0.7)
+                val upJs = """
+                    (function() {
+                        var target = document.elementFromPoint($ex, $ey) || document.body;
+                        target.dispatchEvent(new MouseEvent('mouseup', {bubbles:true, cancelable:true, clientX:$ex, clientY:$ey, button:0, buttons:0}));
+                        return 'up';
+                    })()
+                """.trimIndent()
+                runJs(upJs, 5000L)
+                HumanEmulation.setCursorPosition(webView, ex, ey)
+                return "Dragged from (${sx.toInt()}, ${sy.toInt()}) to (${ex.toInt()}, ${ey.toInt()})"
+            }
+        }
+
         val startSel = resolveSelector(startTarget)
         val endSel = resolveSelector(endTarget)
         val scrollJs = if (scrollIntoView) """
@@ -923,5 +1216,80 @@ class ToolExecutor @Inject constructor(
             DayOfWeek.SUNDAY -> "Sunday"
         }
         return """{"iso8601": "${now.format(isoFormatter)}", "local": "${now.format(localFormatter)}", "date": "${now.toLocalDate()}", "time": "${now.toLocalTime().toString().take(8)}", "timezone": "$zone", "timezoneOffset": "$offsetStr", "dayOfWeek": "$dayOfWeek", "unixTimestamp": ${now.toEpochSecond()}}"""
+    }
+
+    private suspend fun saveImage(target: String?, url: String?, filename: String?, path: String?): String {
+        val imageUrl: String
+        if (!url.isNullOrBlank()) {
+            imageUrl = url
+        } else if (!target.isNullOrBlank()) {
+            val sel = resolveSelector(target)
+            val js = """
+                (function() {
+                    var el = document.querySelector('$sel');
+                    if (!el) return JSON.stringify({error: 'Element not found'});
+                    var tag = el.tagName.toLowerCase();
+                    if (tag === 'img') {
+                        return JSON.stringify({
+                            src: el.currentSrc || el.src,
+                            alt: el.alt || ''
+                        });
+                    }
+                    var imgs = el.querySelectorAll('img');
+                    if (imgs.length > 0) {
+                        return JSON.stringify({
+                            src: imgs[0].currentSrc || imgs[0].src,
+                            alt: imgs[0].alt || ''
+                        });
+                    }
+                    var bg = window.getComputedStyle(el).backgroundImage;
+                    if (bg && bg !== 'none') {
+                        var m = bg.match(/url\(["']?([^"')]+)["']?\)/);
+                        if (m) return JSON.stringify({src: m[1], alt: ''});
+                    }
+                    return JSON.stringify({error: 'Element is not an image (tag=' + tag + ')'});
+                })()
+            """.trimIndent()
+            val result = runJs(js)
+            val json = try { JsonParser.parseString(result).asJsonObject } catch (_: Exception) { null }
+            val error = json?.get("error")?.asString
+            if (error != null) return "Failed: $error"
+            imageUrl = json?.get("src")?.asString ?: return "No image source found on element"
+        } else {
+            return "Either target or url must be provided"
+        }
+
+        return withContext(Dispatchers.IO) {
+            val request = Request.Builder().url(imageUrl).build()
+            val response = client.newCall(request).execute()
+            if (!response.isSuccessful) return@withContext "Download failed: HTTP ${response.code}"
+            val body = response.body ?: return@withContext "Download failed: empty response"
+
+            val name = if (!filename.isNullOrBlank()) filename
+            else {
+                val disposition = response.header("Content-Disposition")
+                val headerName = disposition?.let {
+                    Regex("filename=\"?([^\";]+)\"?").find(it)?.groupValues?.getOrNull(1)
+                }
+                headerName ?: android.net.Uri.parse(imageUrl).lastPathSegment ?: "image"
+            }
+
+            val fullPath = if (!path.isNullOrBlank()) "$path/$name" else name
+            val root = resolveRoot() ?: return@withContext "Notes directory not configured. Go to Settings → Behavior to set one."
+            val existing = findDocument(root, fullPath)
+            if (existing != null && existing.isDirectory) return@withContext "Cannot overwrite a directory: $fullPath"
+            if (existing != null && !existing.delete()) return@withContext "Failed to delete existing file: $fullPath"
+            val file = resolveOrCreateFile(root, fullPath)
+                ?: return@withContext "Failed to create file: $fullPath"
+
+            val bytes = body.bytes()
+            context.contentResolver.openOutputStream(file.uri, "wt")?.use { out ->
+                out.write(bytes)
+                out.flush()
+            } ?: return@withContext "Failed to open file for writing: $fullPath"
+            body.close()
+
+            "Saved ${bytes.size} bytes as $name"
+        }
     }
 }

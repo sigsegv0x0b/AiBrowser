@@ -39,6 +39,7 @@ private fun describeToolCall(name: String, args: Map<String, Any>): String {
         "file_list" -> "List ${args["path"] ?: "/"}"
         "get_location" -> "Get device location"
         "dateTime" -> "Get date and time"
+        "save_image" -> "Save image: ${args["filename"] ?: args["url"] ?: args["target"]}"
         else -> "$name(${args.entries.filter { it.key != "content" }.joinToString { "${it.key}=${it.value}" }})"
     }
 }
