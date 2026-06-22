@@ -107,6 +107,70 @@ The JNI functions in `libmnnllmapp.so` map to class `com.alibaba.mnnllm.android.
 
 NDK toolchain ships x86_64 binaries (`clang`, `ld`) that won't run on aarch64 Termux. Native Termux clang can compile MNN (used for our `libmnnbridge.so`), but the official APK libraries are tested and stable. We bundle those.
 
+### Extracting from APK (recommended)
+
+The easiest way to get the native libraries is to extract them from the official **MNN Chat APK** (`mnn_chat_0_8_3.apk`). Use the included script:
+
+```bash
+./extract-mnn.sh
+# or with an explicit path:
+./extract-mnn.sh /path/to/mnn_chat_0_8_3.apk
+```
+
+The script:
+- Requires `unzip` (`pkg install unzip` on Termux)
+- Extracts `libMNN.so`, `libmnnllmapp.so`, `libc++_shared.so` from `lib/arm64-v8a/` inside the APK
+- Copies them to `app/src/main/jniLibs/arm64-v8a/`
+- Reports size of each extracted library and warns about any that are missing
+
+Download the MNN Chat APK from https://github.com/alibaba/MNN/releases (look for the release that ships an APK named `mnn_chat_*.apk`). The script works with any APK that contains the three libraries in `lib/arm64-v8a/`.
+
+### Building from source on Termux
+
+If you need to build the MNN libraries from source (e.g. to apply patches, use a newer commit, or modify inference behavior):
+
+**Prerequisites:**
+
+```bash
+pkg install cmake clang git ninja
+```
+
+**libMNN.so** (MNN inference engine):
+
+```bash
+git clone https://github.com/alibaba/MNN.git
+cd MNN
+mkdir build && cd build
+cmake .. -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_C_COMPILER=clang \
+  -DCMAKE_CXX_COMPILER=clang++ \
+  -DMNN_BUILD_SHARED_LIBS=ON \
+  -DMNN_OPENMP=OFF \
+  -DMNN_BUILD_TRAIN=OFF \
+  -DMNN_BUILD_CONVERTER=OFF \
+  -DMNN_USE_SYSTEM_LIB=OFF
+ninja
+# Output: source/backend/libMNN.so
+cp source/backend/libMNN.so \
+  /path/to/browseragent/app/src/main/jniLibs/arm64-v8a/
+```
+
+The build above uses **Termux's native aarch64 clang** (not the NDK's x86_64 clang) so it runs natively on aarch64 Termux. The Android NDK ships x86_64 `clang`/`ld` that only run under qemu/proot on Termux — avoid them.
+
+**libmnnllmapp.so** (JNI bridge):
+
+This library is **not part of the main MNN repo** — it's built as part of the separate `mnnllmapp` Android project. Building it requires the full Android NDK + Gradle build of that project, which is not practical on Termux.
+
+**Recommendation:** extract `libmnnllmapp.so` from the official APK with `./extract-mnn.sh` (it comes from the same MNN release). The JNI exports in `libmnnllmapp.so` match our `LlmSession.kt` wrapper.
+
+**libc++_shared.so** (C++ runtime):
+
+Used by both `libMNN.so` and `libmnnllmapp.so`. Options, in order of preference:
+1. Extract from the official APK: `./extract-mnn.sh` (version-matched with the other libs)
+2. Extract from Android NDK: `find $ANDROID_HOME -name "libc++_shared.so" 2>/dev/null`
+3. Static-link C++ into MNN to avoid needing this library: add `-DCMAKE_CXX_FLAGS="-static-libstdc++"` to the libMNN cmake command above (produces a larger `libMNN.so`)
+
 ### Custom JNI bridge (`libmnnbridge.so`)
 
 Located at `app/src/main/cpp/` — built natively with Termux cmake/clang when needed for additional JNI functions. Currently **not used** in favor of the official `libmnnllmapp.so`.
