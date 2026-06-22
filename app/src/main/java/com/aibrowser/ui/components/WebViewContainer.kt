@@ -2,7 +2,6 @@ package com.aibrowser.ui.components
 
 import android.annotation.SuppressLint
 import android.graphics.Bitmap
-import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
@@ -10,11 +9,12 @@ import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.widget.FrameLayout
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import com.aibrowser.agent.StealthInjector
+import com.aibrowser.browser.AutofillFrameLayout
 import com.aibrowser.browser.TabState
 import java.net.URLEncoder
 
@@ -30,16 +30,15 @@ fun WebViewContainer(
     onNavigationStateChanged: (Boolean, Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val clients = remember(tab.id) { WebViewClients() }
+
     AndroidView(
         factory = { context ->
-            FrameLayout(context).apply {
+            AutofillFrameLayout(context).apply {
                 layoutParams = ViewGroup.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.MATCH_PARENT
                 )
-                isFocusable = false
-                isFocusableInTouchMode = false
-                setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS)
             }
         },
         modifier = modifier,
@@ -55,87 +54,117 @@ fun WebViewContainer(
                     wrapperView.addView(tabWebView)
                 }
 
-                tabWebView.webViewClient = object : WebViewClient() {
-                    override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-                        super.onPageStarted(view, url, favicon)
-                        onUrlChanged(url ?: "")
-                        onLoadingChanged(true)
-                    }
-
-                    override fun onPageFinished(view: WebView?, url: String?) {
-                        super.onPageFinished(view, url)
-                        onUrlChanged(url ?: "")
-                        onLoadingChanged(false)
-                        view?.let { onNavigationStateChanged(it.canGoBack(), it.canGoForward()) }
-                        CookieManager.getInstance().flush()
-                        StealthInjector.inject(tabWebView)
-                    }
-
-                    override fun onReceivedError(
-                        view: WebView?,
-                        request: WebResourceRequest?,
-                        error: WebResourceError?
-                    ) {
-                        super.onReceivedError(view, request, error)
-                        if (request?.isForMainFrame != true) return
-                        val failingUrl = request.url?.toString() ?: return
-                        if (failingUrl.startsWith("about:")) return
-                        if (view == null) return
-                        val host = request.url?.host.orEmpty()
-                        val path = request.url?.path.orEmpty()
-                        val query = (host + path).trimEnd('/').ifEmpty { failingUrl }
-                        val searchUrl = "https://www.google.com/search?q=" +
-                            URLEncoder.encode(query, "UTF-8")
-                        val html = buildErrorPageHtml(query, searchUrl)
-                        view.loadDataWithBaseURL("about:blank", html, "text/html", "UTF-8", null)
-                    }
-
-                    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                        val uri = request?.url ?: return false
-                        val scheme = uri.scheme?.lowercase() ?: ""
-
-                        if (scheme == "http" || scheme == "https" || !blockExternalIntents) {
-                            return false
-                        }
-
-                        val blockedUrl = uri.toString()
-
-                        if (scheme == "intent") {
-                            val fallback = uri.getQueryParameter("browser_fallback_url")
-                            if (!fallback.isNullOrBlank()) {
-                                view?.loadUrl(fallback)
-                            }
-                            onIntentBlocked(blockedUrl)
-                            return true
-                        }
-
-                        val host = uri.host ?: return true
-                        val httpsUrl = buildString {
-                            append("https://")
-                            append(host)
-                            if (uri.path != null) append(uri.path)
-                            if (uri.query != null) append("?").append(uri.query)
-                        }
-                        view?.loadUrl(httpsUrl)
-                        onIntentBlocked(blockedUrl)
-                        return true
+                if (tabWebView.webViewClient !== clients.webViewClient) {
+                    tabWebView.webViewClient = clients.webViewClient.apply {
+                        this.blockExternalIntents = blockExternalIntents
+                        this.onIntentBlocked = onIntentBlocked
+                        this.onUrlChanged = onUrlChanged
+                        this.onLoadingChanged = onLoadingChanged
+                        this.onNavigationStateChanged = onNavigationStateChanged
                     }
                 }
-
-                tabWebView.webChromeClient = object : WebChromeClient() {
-                    override fun onReceivedTitle(view: WebView?, title: String?) {
-                        super.onReceivedTitle(view, title)
-                        onTitleChanged(title ?: "Untitled")
-                    }
-
-                    override fun onProgressChanged(view: WebView?, newProgress: Int) {
-                        super.onProgressChanged(view, newProgress)
-                        onLoadingChanged(newProgress < 100)
+                if (tabWebView.webChromeClient !== clients.webChromeClient) {
+                    tabWebView.webChromeClient = clients.webChromeClient.apply {
+                        this.onTitleChanged = onTitleChanged
+                        this.onLoadingChanged = onLoadingChanged
                     }
                 }
             }
         }
     )
+}
+
+private class WebViewClients {
+    val webViewClient: CachingWebViewClient = CachingWebViewClient()
+    val webChromeClient: CachingWebChromeClient = CachingWebChromeClient()
+}
+
+private class CachingWebViewClient : WebViewClient() {
+    var blockExternalIntents: Boolean = true
+    var onIntentBlocked: (String) -> Unit = {}
+    var onUrlChanged: (String) -> Unit = {}
+    var onLoadingChanged: (Boolean) -> Unit = {}
+    var onNavigationStateChanged: (Boolean, Boolean) -> Unit = { _, _ -> }
+
+    override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+        super.onPageStarted(view, url, favicon)
+        onUrlChanged(url ?: "")
+        onLoadingChanged(true)
+    }
+
+    override fun onPageFinished(view: WebView?, url: String?) {
+        super.onPageFinished(view, url)
+        onUrlChanged(url ?: "")
+        onLoadingChanged(false)
+        view?.let { onNavigationStateChanged(it.canGoBack(), it.canGoForward()) }
+        CookieManager.getInstance().flush()
+        view?.let { StealthInjector.inject(it) }
+    }
+
+    override fun onReceivedError(
+        view: WebView?,
+        request: WebResourceRequest?,
+        error: WebResourceError?
+    ) {
+        super.onReceivedError(view, request, error)
+        if (request?.isForMainFrame != true) return
+        val failingUrl = request.url?.toString() ?: return
+        if (failingUrl.startsWith("about:")) return
+        if (view == null) return
+        val host = request.url?.host.orEmpty()
+        val path = request.url?.path.orEmpty()
+        val query = (host + path).trimEnd('/').ifEmpty { failingUrl }
+        val searchUrl = "https://www.google.com/search?q=" +
+            URLEncoder.encode(query, "UTF-8")
+        val html = buildErrorPageHtml(query, searchUrl)
+        view.loadDataWithBaseURL("about:blank", html, "text/html", "UTF-8", null)
+    }
+
+    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+        val uri = request?.url ?: return false
+        val scheme = uri.scheme?.lowercase() ?: ""
+
+        if (scheme == "http" || scheme == "https" || !blockExternalIntents) {
+            return false
+        }
+
+        val blockedUrl = uri.toString()
+
+        if (scheme == "intent") {
+            val fallback = uri.getQueryParameter("browser_fallback_url")
+            if (!fallback.isNullOrBlank()) {
+                view?.loadUrl(fallback)
+            }
+            onIntentBlocked(blockedUrl)
+            return true
+        }
+
+        val host = uri.host ?: return true
+        val httpsUrl = buildString {
+            append("https://")
+            append(host)
+            if (uri.path != null) append(uri.path)
+            if (uri.query != null) append("?").append(uri.query)
+        }
+        view?.loadUrl(httpsUrl)
+        onIntentBlocked(blockedUrl)
+        return true
+    }
+}
+
+private class CachingWebChromeClient : WebChromeClient() {
+    var onTitleChanged: (String) -> Unit = {}
+    var onLoadingChanged: (Boolean) -> Unit = {}
+
+    override fun onReceivedTitle(view: WebView?, title: String?) {
+        super.onReceivedTitle(view, title)
+        onTitleChanged(title ?: "Untitled")
+    }
+
+    override fun onProgressChanged(view: WebView?, newProgress: Int) {
+        super.onProgressChanged(view, newProgress)
+        onLoadingChanged(newProgress < 100)
+    }
 }
 
 private fun htmlEscape(s: String): String = s
